@@ -63,7 +63,6 @@
       "dependsOrder": "sequence",
       "dependsOn": [
         "TSLPatcher: Validate repo surface",
-        "TSLPatcher: Validate default runtime data",
         "TSLPatcher: Validate Wine availability"
       ],
       "problemMatcher": [],
