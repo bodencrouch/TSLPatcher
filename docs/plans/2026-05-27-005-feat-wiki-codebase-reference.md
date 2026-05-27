@@ -1,7 +1,7 @@
 ---
 title: Wiki Codebase Reference
 type: feat
-status: active
+status: completed
 date: 2026-05-27
 ---
 
@@ -153,7 +153,6 @@ Wiki support is enabled on GitHub and the corresponding `TSLPatcher.wiki.git` re
 
 **Goal:** Explain the active codebase internals in exact but plain language, grounded in source citations.
 
-**Requirements:** R3, R4, R5, R6
 **Requirements:** R3, R4, R5, R6, R10
 
 **Dependencies:** U2
@@ -231,7 +230,7 @@ Wiki support is enabled on GitHub and the corresponding `TSLPatcher.wiki.git` re
 
 ### U5. Validate, Commit, And Publish The Wiki Slice
 
-**Goal:** Create repo-local documentation that mirrors the most important build and architecture guidance while the wiki work is in progress.
+**Goal:** Create repo-local documentation that mirrors the most important build and architecture guidance alongside the published wiki reference set.
 
 **Requirements:** R8, R9
 
