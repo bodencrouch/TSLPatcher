@@ -43,5 +43,5 @@
   "omnipascal.defaultDevelopmentEnvironment": "FreePascal",
   "omnipascal.freePascalSourcePath": "/usr/share/fpcsrc",
   "omnipascal.lazbuildPath": "/usr/bin/lazbuild",
-  "omnipascal.searchPath": "/usr/lib64/lazarus/lcl;/usr/lib64/lazarus/lcl/*;/usr/lib64/lazarus/components/lazutils;/usr/lib64/lazarus/components/lazutils/*"
+  "omnipascal.searchPath": ".vscode/omnipascal-stubs;/usr/lib64/lazarus/lcl;/usr/lib64/lazarus/lcl/*;/usr/lib64/lazarus/components/lazutils;/usr/lib64/lazarus/components/lazutils/*"
 }
