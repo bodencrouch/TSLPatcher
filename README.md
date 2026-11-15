@@ -46,6 +46,8 @@ Yes, this is the **authentic** source code Stoffe was working with 10-20 some ye
 
 ## Build And Run
 
+Build or download the native Windows and Linux console application using the [CLI guide](CLI.md). The following instructions cover the Delphi GUI target.
+
 ### Prerequisites
 
 - Delphi 7 on Windows.

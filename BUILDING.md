@@ -1,8 +1,8 @@
 # Building And Launching TSLPatcher
 
-For the native Windows/Linux console target, see [CLI.md](CLI.md). Its FPC Delphi-mode build runs the original engine without VCL; the GUI instructions below apply to the separate default Delphi project.
+For the native Windows/Linux console target, see [CLI.md](CLI.md). Its FPC Delphi-mode build runs the original engine as a terminal application. The GUI instructions below apply to the separate default Delphi project.
 
-This document describes how the repository is built and launched today, what the runtime expects beside the executable, and what the committed VS Code workflow does on Windows versus Linux or macOS.
+This document describes how the legacy GUI is built and launched today, what the runtime expects beside the executable, and what the committed VS Code workflow does on Windows versus Linux or macOS.
 
 ## Source Of Truth
 
@@ -38,7 +38,7 @@ Two similarly named files in the repository root are historical and are not refe
 
 ## Preferred Build Environment
 
-The supported build environment is Windows with Delphi 7, as stated in [AGENTS.md](AGENTS.md#L28-L31) and [README.md](README.md#L52-L58).
+The supported GUI build environment is Windows with Delphi 7, as stated in [AGENTS.md](AGENTS.md#L28-L31) and [README.md](README.md#L52-L58).
 
 The smallest build loop is:
 
@@ -55,7 +55,7 @@ This repository does not contain an automated test suite, so build validation is
 
 ## Runtime Layout Beside The Executable
 
-The executable expects a `tslpatchdata` folder next to itself. That expectation is encoded in [UMainForm.pas](UMainForm.pas#L138-L140), where the main form derives the runtime data path from `ExtractFilePath(Application.ExeName) + 'tslpatchdata'`.
+The GUI executable expects a `tslpatchdata` folder next to itself. That expectation is encoded in [UMainForm.pas](UMainForm.pas#L138-L140), where the main form derives the runtime data path from `ExtractFilePath(Application.ExeName) + 'tslpatchdata'`.
 
 Inside that runtime data folder, the default startup expects:
 
@@ -70,7 +70,7 @@ The current repository snapshot does not include a checked-in `tslpatchdata/` fo
 
 ## Command-Line Overrides
 
-The executable accepts up to two optional command-line arguments, parsed in [TSLPatcher.dpr](TSLPatcher.dpr#L20-L31):
+The GUI executable accepts up to two optional command-line arguments, parsed in [TSLPatcher.dpr](TSLPatcher.dpr#L20-L31):
 
 - Argument 1: alternate `.ini` file
 - Argument 2: alternate `.rtf` file
@@ -98,7 +98,7 @@ The default launch preflight intentionally does **not** depend on `Validate defa
 
 ### Build Helper
 
-`TSLPatcher: Build project (Delphi 7)` only performs a real build on Windows. On Linux and macOS it exits with an explicit message that Delphi 7 compilation is Windows-only. That behavior is intentional and matches the repo’s actual toolchain support.
+`TSLPatcher: Build project (Delphi 7)` only performs a real build on Windows. On Linux and macOS it exits with an explicit message that Delphi 7 compilation is Windows-only. That behavior matches the legacy GUI toolchain.
 
 ### Run Helpers
 
@@ -135,7 +135,7 @@ If runtime data is missing, the app itself reports that through the GUI. Two imp
 
 That is why the repo-local workflow lets the executable launch even when `Validate default runtime data` would fail: the application already contains the operator-facing error handling.
 
-## Linux And macOS Reality Check
+## Legacy GUI On Linux And macOS
 
 You can use the committed helpers on Linux or macOS to:
 
@@ -144,7 +144,7 @@ You can use the committed helpers on Linux or macOS to:
 - launch the built Windows executable through Wine,
 - pass alternate `.ini` and `.rtf` arguments.
 
-You cannot use this repository alone to perform a true supported build on Linux or macOS, because the active compiler/toolchain expectation remains Delphi 7 on Windows.
+The legacy GUI build requires Delphi 7 on Windows. The native console target builds on Linux and Windows with Free Pascal, as described in [CLI.md](CLI.md).
 
 ## Practical Build/Launch Checklist
 

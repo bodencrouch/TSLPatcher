@@ -1,6 +1,6 @@
 # Native console interface
 
-Build the console target as `TSLPatcher` on Linux or `TSLPatcher.exe` on Windows. It runs the original patch engine and does not load VCL forms. The separate `TSLPatcher.dpr` GUI project retains its existing positional INI/RTF overrides.
+Build the console target as `TSLPatcher` on Linux or `TSLPatcher.exe` on Windows. It runs the original patch engine as a terminal application. The separate `TSLPatcher.dpr` GUI project supports its existing positional INI/RTF overrides.
 
 ```sh
 mkdir -p build/units build/bin
@@ -14,7 +14,13 @@ New-Item -ItemType Directory -Force build/units, build/bin | Out-Null
 fpc -B -Mdelphi -dTSLPATCHER_HEADLESS -FUbuild/units -FEbuild/bin -oTSLPatcher.exe TSLPatcherCLI.dpr
 ```
 
-Use FPC 3.2.x with its RTL and FCL packages. `-Mdelphi` enables Delphi-compatible language syntax. The native subprocess backend uses FPC's `Process` unit and requires FPC. The default Delphi GUI build remains documented in [BUILDING.md](BUILDING.md).
+Use Free Pascal with its RTL and FCL packages. The workflow uses Ubuntu's FPC packages and Lazarus 4.4's bundled FPC 3.2.2 on Windows. On Ubuntu, install `fp-compiler` and `fp-units-fcl`. On Windows, Lazarus 4.4 supplies the native x86_64 FPC toolchain. `-Mdelphi` enables Delphi-compatible language syntax. The native subprocess backend uses FPC's `Process` unit and requires FPC. The Delphi GUI build is documented in [BUILDING.md](BUILDING.md).
+
+## Download hosted builds
+
+The [Build CLI workflow](.github/workflows/build-cli.yml) runs on Pascal source pushes and supports manual runs from GitHub Actions. Open a successful run and download `TSLPatcher-linux-x86_64` or `TSLPatcher-windows-x86_64` from its artifacts. Extract the Linux artifact, then unpack its `TSLPatcher-linux-x86_64.tar.gz` archive to preserve the executable permission. The Windows artifact contains `TSLPatcher.exe`.
+
+Each runner compiles `TSLPatcherCLI.dpr`, checks help, version and argument errors, and performs installation, validation and repeated restoration with temporary game and package directories containing spaces. The Windows runner also verifies `LookupGameNumber=1` selection with both registry game roots present and restores its temporary registry values afterward.
 
 ## Unattended actions
 
