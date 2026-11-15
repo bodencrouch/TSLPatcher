@@ -437,7 +437,7 @@ begin
     begin
       Session.Load;
       Session.Validate(Game, True, nil);
-      WriteLn('Validation passed; game files were not modified.');
+      WriteLn('Validation passed.');
       Result := 0;
       Exit;
     end;

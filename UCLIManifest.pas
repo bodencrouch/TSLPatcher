@@ -33,6 +33,10 @@ uses UPatcherPlatform
 {$IFDEF UNIX}, BaseUnix, Unix{$ENDIF}
 {$IFDEF MSWINDOWS}, Windows{$ENDIF};
 {$IFDEF MSWINDOWS}
+const
+  // Win32 MoveFileEx flag supplied locally for FPC 3.2.2 Windows headers.
+  CLI_MOVEFILE_WRITE_THROUGH = $00000008;
+
 function GetFinalPathNameByHandleA(FileHandle: THandle; FilePath: PChar; BufferSize, Flags: DWORD): DWORD;
 stdcall;
 external 'kernel32.dll';
@@ -320,7 +324,7 @@ procedure TInstallManifest.SetState(const State: string);
 begin
   DurableText(FDirectory + PathDelim + 'state.new', State);
   {$IFDEF MSWINDOWS}
-  if not MoveFileEx(PChar(FDirectory + PathDelim + 'state.new'), PChar(FDirectory + PathDelim + 'state'), MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then RaiseLastOSError;
+  if not MoveFileEx(PChar(FDirectory + PathDelim + 'state.new'), PChar(FDirectory + PathDelim + 'state'), MOVEFILE_REPLACE_EXISTING or CLI_MOVEFILE_WRITE_THROUGH) then RaiseLastOSError;
   {$ELSE}
   if not SysUtils.RenameFile(FDirectory + PathDelim + 'state.new', FDirectory + PathDelim + 'state') then
   RaiseLastOSError;
@@ -444,7 +448,7 @@ begin
       .Create('Cannot remove ' + CurrentPath);
     end;
     DurableText(Generation + PathDelim + 'state', 'restored');
-    WriteLn('Restored ', Generation, '; backup retained.');
+    WriteLn('Restored backup ' + Generation + '.');
   finally
     Targets.Free;
     Lines.Free;
