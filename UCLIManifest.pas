@@ -133,28 +133,8 @@ begin
   end;
 end;
 procedure CheckNoLinks(const Path: string);
-
-var CurrentPath, Parent: string;
-{$IFDEF UNIX}
-Info: Stat; {$ENDIF}
-{$IFDEF MSWINDOWS}
-Attr: DWORD; {$ENDIF}
 begin
-  CurrentPath := ExpandFileName(Path);
-  repeat
-    {$IFDEF UNIX}
-    if (fpLStat(PChar(CurrentPath), Info) = 0) and FPS_ISLNK(Info.st_mode) then
-    raise Exception.Create('Symbolic links are not allowed in managed paths: ' + CurrentPath);
-    {$ENDIF}
-    {$IFDEF MSWINDOWS}
-    Attr := GetFileAttributes(PChar(CurrentPath));
-    if (Attr <> INVALID_FILE_ATTRIBUTES) and ((Attr and FILE_ATTRIBUTE_REPARSE_POINT) <> 0) then
-    raise Exception.Create('Reparse points are not allowed in managed paths: ' + CurrentPath);
-    {$ENDIF}
-    Parent := ExtractFileDir(CurrentPath);
-    if Parent = CurrentPath then Break;
-    CurrentPath := Parent;
-  until CurrentPath = '';
+  UPatcherPlatform.CheckNoLinks(Path);
 end;
 function SafePath(const Root, Relative: string; AllowRoot: boolean): string;
 
@@ -337,15 +317,19 @@ var CurrentPath, Rel, Line, Key: string;
 Stream: Classes.TFileStream;
 Exists: boolean;
 begin
+  CurrentPath := NativePath(Destination);
+  // Engine-owned source recovery remains available after a game capture failure.
+  if (Copy(CurrentPath, 1, Length(IncludeTrailingPathDelimiter(FSourceRoot))) =
+    IncludeTrailingPathDelimiter(FSourceRoot)) or
+    (Copy(CurrentPath, 1, Length(IncludeTrailingPathDelimiter(FBackup))) =
+    IncludeTrailingPathDelimiter(FBackup)) then
+  begin
+    CheckNoLinks(CurrentPath);
+    Exit;
+  end;
   if FCaptureFailed then raise Exception.Create('An earlier before-image capture failed; refusing further game writes');
   try
-    CurrentPath := NativePath(Destination);
     CheckNoLinks(CurrentPath);
-    // Package source/temp files remain engine-owned, including child compiler outputs.
-    if Copy(CurrentPath, 1, Length(IncludeTrailingPathDelimiter(FSourceRoot))) =
-      IncludeTrailingPathDelimiter(FSourceRoot) then Exit;
-    // Engine's legacy copies are metadata, never recursively snapshot our backups.
-    if Copy(CurrentPath, 1, Length(IncludeTrailingPathDelimiter(FBackup))) = IncludeTrailingPathDelimiter(FBackup) then Exit;
     Rel := Copy(CurrentPath, Length(IncludeTrailingPathDelimiter(FRoot))+1, MaxInt);
     if ManagedPath(FRoot, Rel) <> CurrentPath then raise Exception.Create('Write outside game root: ' + CurrentPath);
     Key := HexEncode(Rel);

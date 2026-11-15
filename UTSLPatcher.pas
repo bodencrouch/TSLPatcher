@@ -2380,6 +2380,7 @@ begin
     // sTmpFile := ExtractFilePath(sFile) + 'tmp_' + ExtractFileName(sFile);
     {$IFDEF TSLPATCHER_HEADLESS}
     sFile := NativePath(sFile);
+    CheckNoLinks(sFile);
     sTmpFile := NativePath(l_datapath + 'nsspatch_temp/' + Copy(sFile, Length(l_datapath) + 1, MaxInt));
     UPatcherPlatform.ForceDirectories(ExtractFilePath(sTmpFile));
     {$ELSE}
@@ -2392,10 +2393,12 @@ begin
     // Never overwrite a recovery copy left by an earlier interrupted operation.
     sBackupBase := sTmpFile;
     BackupIndex := 0;
+    {$IFDEF TSLPATCHER_HEADLESS}CheckNoLinks(sTmpFile);{$ENDIF}
     while {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sTmpFile) or
           {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(sTmpFile) do begin
         Inc(BackupIndex);
         sTmpFile := sBackupBase + '.recovery-' + IntToStr(BackupIndex);
+        {$IFDEF TSLPATCHER_HEADLESS}CheckNoLinks(sTmpFile);{$ENDIF}
     end;
     rRes.ModFile   := sFile;
     rRes.OrgFile   := sTmpFile;
@@ -2909,7 +2912,8 @@ begin
                     finally
                         // Restore each source even when archive capture/save was rejected.
                         bDebugFiles := l_ini.ReadBool('Settings', 'SaveProcessedScripts', false);
-                        for i := 0 to oOrgList.Count - 1 do begin
+                        // Unwind repeated rewrites so the earliest original is restored last.
+                        for i := oOrgList.Count - 1 downto 0 do begin
                             try
                                 if bDebugFiles then begin
                                     {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(IncludeTrailingPathDelimiter(l_datapath + 'debug'));

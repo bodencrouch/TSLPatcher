@@ -6,7 +6,7 @@ function RunCLI: integer;
 implementation
 
 uses Classes, SysUtils, IniFiles, UCLIOptions, UCLIConfig, UCLIManifest, UCLIGamePaths,
-UPatcherPlatform, UTSLPatcher
+UPatcherPlatform, UTSLPatcher, UCLISummary
 {$IFDEF UNIX}, BaseUnix, Unix{$ENDIF}
 {$IFDEF MSWINDOWS}, Windows{$ENDIF};
 
@@ -369,8 +369,9 @@ begin
         Session.Load;
         Keys := TStringList.Create;
         try
-          Session.Config.ReadSections(Keys);
-          WriteLn(Session.IniPath, ': ', Keys.Count, ' sections');
+          Game := Options.GameDir;
+          if Options.Game <> '' then Game := Options.Game;
+          BuildSummary(Session, Game, Keys);
           write(Keys.Text);
         finally
           Keys.Free;

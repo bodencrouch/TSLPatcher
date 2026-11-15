@@ -16,6 +16,7 @@ var
   WriteRoot: string;
 
 function NativePath(const Value: string): string;
+procedure CheckNoLinks(const Path: string);
 procedure NotifyWrite(const FileName: string);
 function FileExists(const FileName: string): Boolean;
 function DirectoryExists(const Directory: string): Boolean;
@@ -29,7 +30,9 @@ function RunNativeCompiler(const Executable, Flags, WorkingDirectory, SourceFile
 
 implementation
 
-uses Process;
+uses Process
+{$IFDEF UNIX}, BaseUnix{$ENDIF}
+{$IFDEF MSWINDOWS}, Windows{$ENDIF};
 
 function NativePath(const Value: string): string;
 var Parts: TStringList; Current, Part, Match: string; Separator: Integer; I, Count: Integer; SR: TSearchRec;
@@ -71,11 +74,37 @@ begin
   finally Parts.Free; end;
 end;
 
+procedure CheckNoLinks(const Path: string);
+
+var CurrentPath, Parent: string;
+{$IFDEF UNIX}
+Info: Stat; {$ENDIF}
+{$IFDEF MSWINDOWS}
+Attr: DWORD; {$ENDIF}
+begin
+  CurrentPath := ExpandFileName(Path);
+  repeat
+    {$IFDEF UNIX}
+    if (fpLStat(PChar(CurrentPath), Info) = 0) and FPS_ISLNK(Info.st_mode) then
+    raise Exception.Create('Symbolic links are not allowed in managed paths: ' + CurrentPath);
+    {$ENDIF}
+    {$IFDEF MSWINDOWS}
+    Attr := GetFileAttributes(PChar(CurrentPath));
+    if (Attr <> INVALID_FILE_ATTRIBUTES) and ((Attr and FILE_ATTRIBUTE_REPARSE_POINT) <> 0) then
+    raise Exception.Create('Reparse points are not allowed in managed paths: ' + CurrentPath);
+    {$ENDIF}
+    Parent := ExtractFileDir(CurrentPath);
+    if Parent = CurrentPath then Break;
+    CurrentPath := Parent;
+  until CurrentPath = '';
+end;
 procedure NotifyWrite(const FileName: string);
 var Path, Root: string;
 begin
-  if not Assigned(BeforeWrite) or (WriteRoot = '') then Exit;
   Path := NativePath(FileName);
+  // Every engine mutation retains lexical identity, including package scratch.
+  CheckNoLinks(Path);
+  if not Assigned(BeforeWrite) or (WriteRoot = '') then Exit;
   Root := IncludeTrailingPathDelimiter(NativePath(WriteRoot));
   if Copy(Path, 1, Length(Root)) = Root then BeforeWrite(Path);
 end;
@@ -93,9 +122,19 @@ begin Result := SysUtils.FileExists(NativePath(FileName)); end;
 function DirectoryExists(const Directory: string): Boolean;
 begin Result := SysUtils.DirectoryExists(NativePath(Directory)); end;
 function ForceDirectories(const Directory: string): Boolean;
-begin Result := SysUtils.ForceDirectories(NativePath(Directory)); end;
+var Path: string;
+begin
+  Path := NativePath(Directory);
+  CheckNoLinks(Path);
+  Result := SysUtils.ForceDirectories(Path);
+end;
 function RemoveDir(const Directory: string): Boolean;
-begin Result := SysUtils.RemoveDir(NativePath(Directory)); end;
+var Path: string;
+begin
+  Path := NativePath(Directory);
+  CheckNoLinks(Path);
+  Result := SysUtils.RemoveDir(Path);
+end;
 function DeleteFile(const FileName: string): Boolean;
 begin NotifyWrite(FileName); Result := SysUtils.DeleteFile(NativePath(FileName)); end;
 function RenameFile(const OldName, NewName: string): Boolean;
@@ -152,6 +191,8 @@ begin Result := RunNativeProcess(Executable, Parameters, WorkingDirectory, []); 
 
 function RunNativeCompiler(const Executable, Flags, WorkingDirectory, SourceFile, OutputFile: string): string;
 begin
+  // The compiler owns its implementation, but this output path is ours.
+  NotifyWrite(OutputFile);
   Result := RunNativeProcess(Executable, Flags, WorkingDirectory,
     ['-c', NativePath(SourceFile), '-o', NativePath(OutputFile)]);
 end;
