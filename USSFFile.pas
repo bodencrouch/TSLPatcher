@@ -9,7 +9,7 @@ unit USSFFile;
 interface
 
 uses
-    Windows, SysUtils, classes, UST_Common;
+    {$IFNDEF TSLPATCHER_HEADLESS}Windows{$ELSE}Types{$ENDIF}, SysUtils, classes, UST_Common {$IFDEF TSLPATCHER_HEADLESS}, UPatcherPlatform{$ENDIF};
 
 type
     T4Char  = array[0..3] of Char;
@@ -165,7 +165,7 @@ var
 begin
      Reset();
 
-     if not SysUtils.FileExists(sFilename) then begin
+     if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename) then begin
          raise ESSFError.CreateHelp('Selected file "' + sFilename + '" does not exist! Unable to load it.', 5);
      end;
 

@@ -41,7 +41,7 @@ Carriage-return character. ASCII 0x0D.  #13      (Vagnretur! Vilket namn...)
 *)
 interface
 
-uses sysutils, classes, windows;
+uses sysutils, classes, {$IFNDEF TSLPATCHER_HEADLESS}Windows{$ELSE}Types{$ENDIF} {$IFDEF TSLPATCHER_HEADLESS}, UPatcherPlatform{$ENDIF};
 
 type
 TResRef = array[0..15] of Char;
@@ -128,11 +128,13 @@ procedure MakeFileWritable(sFilename : string);
 var
   nFlags  : Word;
 begin
-     if (FileExists(sFilename)) then begin
+    {$IFDEF TSLPATCHER_HEADLESS}sFilename := NativePath(sFilename);{$ENDIF}
+     if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename)) then begin
      	nFlags := FileGetAttr(sFilename);
         if ((nFlags and faReadOnly) = faReadOnly) then begin
            nFlags := nFlags and not faReadOnly;
-           FileSetAttr(sFilename, nFlags);
+           {$IFDEF TSLPATCHER_HEADLESS}NotifyWrite(sFilename);{$ENDIF}
+            FileSetAttr(sFilename, nFlags);
         end;
      end;
 end;
@@ -406,7 +408,7 @@ begin
         raise EDead.CreateHelp('The open 2da file is empty. There is no point in saving it.', 28);
 
      // Remove the ReadOnly flag if the file already exists, before writing.
-     if (FileExists(sFilename)) then
+     if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename)) then
         MakeFileWritable(sFilename);
 
      outFile := TFileStream.Create(sFilename, fmCreate or fmShareDenyWrite);

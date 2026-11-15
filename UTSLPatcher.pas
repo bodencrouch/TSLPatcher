@@ -340,9 +340,10 @@ unit UTSLPatcher;
 
 interface
 
-uses stdctrls, U2DAEdit, UTLKFile, UGFFFile, UST_inifile, Classes, dialogs, Forms,
-     FileCtrl, Windows, SysUtils, comctrls, Graphics, UST_Common, UStrTok, UERFHandler,
-     USSFFile;
+uses U2DAEdit, UTLKFile, UGFFFile, UST_IniFile, Classes, SysUtils,
+     UST_Common, UStrTok, UERFHandler, USSFFile
+     {$IFDEF TSLPATCHER_HEADLESS}, UPatcherPlatform
+     {$ELSE}, stdctrls, dialogs, Forms, FileCtrl, Windows, comctrls, Graphics{$ENDIF};
 
 
 // -----------------------------------------------------------------------------
@@ -352,6 +353,7 @@ type
 TPatchFile      = (fileTlk, file2da, fileGff, fileHack, fileCompile, fileGffErf, fileSSF);
 TStrRefList     = array of array of integer;
 TMemory         = array of string;
+TSLLogCallback = procedure(const Text: string; Level: integer) of object;
 TSLPathCallback = procedure(const sPath : string) of object;
 TSLProgressCb   = procedure(const iCnt : integer; const iMax : integer) of object;
 
@@ -387,7 +389,10 @@ TPatchFileHandler = class(TObject)
         l_datapath    : string;        // Path till mappen datafilerna finns i (normalt 'tslpatchdata')
         l_destination : string;        // ADDED(2006-08-06) Name of destination, either 'override' or path+name of ERF/RIM file.
 
+        {$IFNDEF TSLPATCHER_HEADLESS}
         l_dlgbox      : TOpenDialog;   // Öppna-dialogbox patchern frågar efter filer med.
+        {$ENDIF}
+        l_backuproot  : string;
         l_parentclass : TObject;       // Referens till TTSLPatcher objektet, anv. för att logga meddelanden.
                                        // hur gör man forward-deklaration till en typ? TTSLPatcher ej def här.
 
@@ -396,7 +401,7 @@ TPatchFileHandler = class(TObject)
         function GetFilePath() : string;
         function GetInstallPath() : string;
     public
-        constructor Create(oBox : TOpenDialog; sPath : string);
+        constructor Create(oBox : {$IFDEF TSLPATCHER_HEADLESS}TObject{$ELSE}TOpenDialog{$ENDIF}; sPath : string);
 
         function DoBackup() : boolean;
         function DoDestBackup() : boolean;
@@ -421,6 +426,7 @@ TTSLPatcher = class(TObject)
            l_gff  : TGFFFile;                // Hanterare för ändring av GFF filer.
                                              // FIX(2006-01-09) Ändrat till nya GFF-klassen.
 
+           l_backuproot : string;
            l_path     : string;              // Path till mappen programmet finns i.
            l_inifile  : string;              // Namn på ini-filen som skall laddas...
            l_tlkmap   : TStrRefList;         // StrRef Token <--> Append StrRef tabell.
@@ -439,6 +445,7 @@ TTSLPatcher = class(TObject)
            l_progcnt     : integer;            // ADDED(2006-09-14) Current patched file count.
            l_progmax     : integer;            // ADDED(2006-09-14) Number of files to patch.
 
+           function RunPatchOperationInternal: TPatcherResult;
            procedure IncrementProgress(iCnt : Integer);   // ADDED(2006-09-14)
            procedure ReadFileCountFromConfig();           // ADDED(2006-09-14)
            procedure ProcessTLKData();
@@ -475,18 +482,29 @@ TTSLPatcher = class(TObject)
 
            // ADDED(2006-01-10) Added CompileList functionality...
            procedure DoCompileFiles();
-           function ReplaceTokensInFile(sFile : string) : TCompileFileInfo;
+           function ReplaceTokensInFile(sFile : string; OriginalFiles, SourceFiles: TStrings) : TCompileFileInfo;
     public
+           {$IFNDEF TSLPATCHER_HEADLESS}
            logbuffer    : TRichEdit;
            logbuffertxt : TMemo;      // ADDED(2005-07-31) Fallback text log...
 
+           {$ENDIF}
+           {$IFDEF TSLPATCHER_HEADLESS}
+           CompilerPath: string;
+           BeforeWrite: TPatcherBeforeWrite;
+           {$ENDIF}
+           LogCallback: TSLLogCallback;
            PathCallback     : TSLPathCallback;
            ProgressCallback : TSLProgressCb; // ADDED(2006-09-14)
 
+           {$IFDEF TSLPATCHER_HEADLESS}
+           constructor CreateHeadless(const DataDirectory, InstructionFilename,
+               GameDirectory, BackupDirectory: string);
+           {$ENDIF}
            procedure AddLogLine(sText : string; iLevel : integer);
            function RunPatchOperation() : TPatcherResult;
 
-           constructor Create(sFilename : string; oOpenBox : TOpenDialog; sPath : string);
+           constructor Create(sFilename : string; oOpenBox : {$IFDEF TSLPATCHER_HEADLESS}TObject{$ELSE}TOpenDialog{$ENDIF}; sPath : string);
            destructor Destroy(); override;
 end;
 
@@ -768,17 +786,17 @@ end;
 // Constructor - wants the name of the INI file as a parameter, as well as
 // an Open dialog box object the class can use to ask for files.
 // -----------------------------------------------------------------------------
-constructor TTSLPatcher.Create(sFilename : string; oOpenBox : TOpenDialog; sPath : string);
+constructor TTSLPatcher.Create(sFilename : string; oOpenBox : {$IFDEF TSLPATCHER_HEADLESS}TObject{$ELSE}TOpenDialog{$ENDIF}; sPath : string);
 begin
      inherited Create();
 
      l_inifile  := sFileName;
-     l_path     := ExtractFilePath(Application.ExeName);
+     l_path     := ExtractFilePath({$IFDEF TSLPATCHER_HEADLESS}ParamStr(0){$ELSE}Application.ExeName{$ENDIF});
 
      // CHANGED(2006-04-29) Allow changing the path to the directory containing
      //                     the installation data. This used to be hardcoded.
      //                     If no path is specified the default behavior is used.
-     if (Length(sPath) <= 0) or not SysUtils.DirectoryExists(sPath) then
+     if (Length(sPath) <= 0) or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(sPath) then
         l_datapath := l_path + 'tslpatchdata\'
      else
         l_datapath := sPath;
@@ -801,12 +819,43 @@ begin
      l_logold    := l_ini.ReadBool(   'Settings', 'PlaintextLog', False);  // ADDED(2005-07-31)
      
      l_currentfile := '';
+     l_backuproot := l_path + 'backup\';
+     l_dlgopen.l_backuproot := l_backuproot;
 end;
 
 
 // -----------------------------------------------------------------------------
 // Destructor - free the 2da and INI handler objects.
 // -----------------------------------------------------------------------------
+{$IFDEF TSLPATCHER_HEADLESS}
+constructor TTSLPatcher.CreateHeadless(const DataDirectory, InstructionFilename,
+    GameDirectory, BackupDirectory: string);
+var DataRoot, GameRoot, ConfigPath: string;
+begin
+    if (DataDirectory = '') or (InstructionFilename = '') or (GameDirectory = '') then
+        raise Exception.Create('Explicit data directory, instruction filename and game directory required');
+    DataRoot := IncludeTrailingPathDelimiter(NativePath(DataDirectory));
+    GameRoot := IncludeTrailingPathDelimiter(NativePath(GameDirectory));
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(DataRoot) then
+        raise Exception.Create('Data directory not found: ' + DataRoot);
+    ConfigPath := NativePath(DataRoot + InstructionFilename);
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(ConfigPath) then
+        raise Exception.Create('Instruction file not found: ' + ConfigPath);
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(GameRoot) or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(GameRoot + 'dialog.tlk') then
+        raise Exception.Create('Invalid game directory (dialog.tlk required): ' + GameRoot);
+    if BackupDirectory = '' then
+        raise Exception.Create('Explicit backup directory required');
+    Create(InstructionFilename, nil, DataRoot);
+    l_path := IncludeTrailingPathDelimiter(ExtractFileDir(ExcludeTrailingPathDelimiter(DataRoot)));
+    l_backuproot := IncludeTrailingPathDelimiter(NativePath(BackupDirectory));
+    l_dlgopen.l_backuproot := l_backuproot;
+    l_dlgopen.BasePath := l_path;
+    l_dlgopen.l_installpath := GameRoot;
+    l_dlgopen.InstallMode := True;
+    CompilerPath := NativePath(DataRoot + 'nwnnsscomp.exe');
+end;
+{$ENDIF}
+
 destructor TTSLPatcher.Destroy();
 begin
     l_2da.free();
@@ -1046,6 +1095,10 @@ var
    iLog    : integer;
    sPrefix : string;
 begin
+     if iLevel = LOG_LEVEL_ALERT then Inc(l_logalerts);
+     if iLevel = LOG_LEVEL_ERROR then Inc(l_logerrors);
+     if Assigned(LogCallback) then LogCallback(sText, iLevel);
+     {$IFNDEF TSLPATCHER_HEADLESS}
      iLog := l_loglevel;
 
      // Leave the info text in the box if LogLevel is set to 0 in the INI.
@@ -1091,7 +1144,7 @@ begin
           end;
 
           LOG_LEVEL_ALERT: begin   // Orange text in log...
-              inc(l_logalerts);  // ADDED(2005-06-07)
+
               if (iLog > 2) then begin
                   if l_logold then begin
                      sPrefix := ' [Warning] ' + #9;
@@ -1106,7 +1159,7 @@ begin
           end;
 
           LOG_LEVEL_ERROR: begin  // Red text in log...
-              inc(l_logerrors); // ADDED(2005-06-07)
+
               if (iLog > 1) then begin
                   if l_logold then begin
                       sPrefix := ' [Error] ' + #9;
@@ -1171,6 +1224,7 @@ begin
      end;
 
      Application.ProcessMessages;
+     {$ENDIF}
 end;
 
 
@@ -1271,15 +1325,22 @@ begin
         raise EAbort.Create(LS_EXC_TLKFILETYPEMISMATCH);
     end;
 
+    {$IFDEF TSLPATCHER_HEADLESS}
+    if (iType = TLK_TYPE_NORMAL) and (l_tlkmap <> nil) and
+       (Length(l_tlkmap) > 0) and (Length(l_tlkmap[0]) > 0) and
+       not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sAppend) then
+        raise EAbort.Create('TLK source file not found: ' + NativePath(sAppend));
+    {$ENDIF}
+
     if ((l_tlkmap <> nil)
         and (length(l_tlkmap) > 0)
         and (length(l_tlkmap[0]) > 0)
-        and FileExists(sAppend))
+        and {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sAppend))
     then begin
         l_currentfile := sFileName;
 
         if (l_dlgopen.Execute(sFileName, fileTlk)) then begin
-            if (FileExists(l_dlgopen.FilePath) and FileExists(sAppend)) then begin
+            if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_dlgopen.FilePath) and {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sAppend)) then begin
                 AddLogLine(Format(LS_LOG_APPENDFEEDBACK, [l_dlgopen.FilePath]), LOG_LEVEL_INFORMATION);
                 tlkFile := TTLKFileHandler.Create(l_dlgopen.FilePath);
                 try
@@ -1342,7 +1403,7 @@ begin
                            // a backup copy of the original file if one doesn't already exist.
                            if (iCount > 0) then begin  
                               if l_dlgopen.DoBackup() then
-                                 AddLogLine(Format(LS_LOG_MAKETLKBACKUP, [l_dlgopen.FileName, IncludeTrailingPathDelimiter(l_path+'backup')]), LOG_LEVEL_INFORMATION);
+                                 AddLogLine(Format(LS_LOG_MAKETLKBACKUP, [l_dlgopen.FileName, IncludeTrailingPathDelimiter(l_backuproot)]), LOG_LEVEL_INFORMATION);
 
                               tlkFile.SaveTlkFile(l_dlgopen.FilePath);
 
@@ -1435,7 +1496,7 @@ begin
     sType := lowercase(l_ini.ReadString(sSection, '!OverrideType', 'ignore'));
     sFile := IncludeTrailingPathDelimiter(l_dlgOpen.InstallPath + 'override') + sFilename;
 
-    if not SysUtils.FileExists(sFile) then begin
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFile) then begin
         AddLogLine(Format(LS_LOG_OVRCHECKNOFILE, [sFilename]), LOG_LEVEL_VERBOSE);
         exit;
     end;
@@ -1448,7 +1509,7 @@ begin
     else if (sType = 'rename') then begin
         // CHANGED(2006-10-01) Changed renaming convention to old_filename.ext instead.
         sNew := IncludeTrailingPathDelimiter(ExtractFilePath(sFile)) + 'old_' + ExtractFileName(sFile);
-        if SysUtils.RenameFile(sFile, sNew) then begin
+        if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.RenameFile(sFile, sNew) then begin
             AddLogLine(Format(LS_LOG_OVRCHECKRENAMED, [sFilename, ExtractFileName(sNew)]), LOG_LEVEL_INFORMATION);
         end
         else begin
@@ -2100,7 +2161,7 @@ begin
 
                     // REMOVED(2006-08-06) Moved into the dlgopen.Execute method instead,
                     // which will check if the ERF is present where it needs to be.
-                    // if not SysUtils.FileExists(l_datapath + sDest) then begin
+                    // if not FileExists(l_datapath + sDest) then begin
                     //    AddLogLine('Unable to save file "' + sFilename + '" in ERF archive "' + sDest + '", the ERF file could not be found!', LOG_LEVEL_ERROR);
                     //    continue;
                     //end;
@@ -2119,7 +2180,7 @@ begin
                 if ((sFileName <> '') and l_dlgopen.Execute(sFilename, enType, bOverwrite, sDest)) then begin
 
                     // If the specified file doesn't exist, stop here...
-                    if (FileExists(l_dlgopen.FilePath) = False) then
+                    if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_dlgopen.FilePath) = False) then
                         break;
 
                     // Load the GFF File...
@@ -2212,12 +2273,12 @@ begin
                                    // CHANGED(2006-02-03) Don't do backup if the file is to be written to an ERF!
                                    if (enType = fileGff) then begin
                                        if l_dlgopen.DoBackup() then
-                                           AddLogLine(Format(LS_LOG_GFFBACKUPFILE, [l_dlgopen.FileName, IncludeTrailingPathDelimiter(l_path + 'backup')]), LOG_LEVEL_INFORMATION);
+                                           AddLogLine(Format(LS_LOG_GFFBACKUPFILE, [l_dlgopen.FileName, IncludeTrailingPathDelimiter(l_backuproot)]), LOG_LEVEL_INFORMATION);
                                    end
                                    // CHANGED(2006-08-06) ...but do a backup of the ERF/RIM file instead.
                                    else if (enType = fileGffErf) then begin
                                        if l_dlgopen.DoDestBackup() then
-                                           AddLogLine(Format(LS_LOG_GFFBACKUPDEST, [ExtractFileName(l_dlgopen.Destination), IncludeTrailingPathDelimiter(l_path + 'backup')]), LOG_LEVEL_INFORMATION);
+                                           AddLogLine(Format(LS_LOG_GFFBACKUPDEST, [ExtractFileName(l_dlgopen.Destination), IncludeTrailingPathDelimiter(l_backuproot)]), LOG_LEVEL_INFORMATION);
                                    end;
 
                                    AddLogLine(Format(LS_LOG_GFFMODFIELDSUMMARY, [IntToStr(iChanges), ExtractFileName(l_dlgopen.FilePath)]), LOG_LEVEL_VERBOSE);
@@ -2236,7 +2297,7 @@ begin
                                        AddLogLine(Format(LS_LOG_GFFINSERTDONE, [ExtractFileName(l_dlgopen.FilePath), sDest]), LOG_LEVEL_INFORMATION);
                                        // Make a backup of the original ERF file, Justin Case...
                                        // REMOVED(2006-08-06) Already done above now...
-                                       //if not SysUtils.FileExists(l_datapath + 'bak_' + sDest) then
+                                       //if not FileExists(l_datapath + 'bak_' + sDest) then
                                        //    BackupFile(l_datapath + sDest, l_datapath + 'bak_' + sDest);
 
                                        // TODO Keep open while multiple files are supposed to be inserted, like CompileList.
@@ -2249,7 +2310,7 @@ begin
 
                                            // Remove the work file from the TEMP folder.
                                            if l_dlgopen.InstallMode then
-                                               DeleteFile(l_dlgopen.FilePath);
+                                               {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(l_dlgopen.FilePath);
                                        finally
                                            oERF.free();
                                        end;
@@ -2301,33 +2362,62 @@ end;
 // altered ones are used for compilation. Then copy the unaltered file back to
 // the tslpatchdata folder after compiling.
 // -----------------------------------------------------------------------------
-function TTSLPatcher.ReplaceTokensInFile(sFile : string) : TCompileFileInfo;
+function TTSLPatcher.ReplaceTokensInFile(sFile : string; OriginalFiles, SourceFiles: TStrings) : TCompileFileInfo;
 var
    inFile   : Textfile;
    outFile  : Textfile;
    sTemp    : string;
    sTmpFile : string;
+   sBackupBase: string;
+   BackupIndex: Integer;
    i        : integer;
    rRes     : TCompileFileInfo;
 begin
     // CHANGED(2006-02-05) Use a TEMP folder instead of renaming the files.
     // Save the modified file in the TEMP folder..
     // sTmpFile := ExtractFilePath(sFile) + 'tmp_' + ExtractFileName(sFile);
+    {$IFDEF TSLPATCHER_HEADLESS}
+    sFile := NativePath(sFile);
+    sTmpFile := NativePath(l_datapath + 'nsspatch_temp/' + Copy(sFile, Length(l_datapath) + 1, MaxInt));
+    UPatcherPlatform.ForceDirectories(ExtractFilePath(sTmpFile));
+    {$ELSE}
     sTmpFile       := l_datapath + 'nsspatch_temp\' + ExtractFileName(sFile);
+    {$ENDIF}
+    {$IFDEF TSLPATCHER_HEADLESS}
+    sTmpFile := NativePath(sTmpFile);
+    sFile := NativePath(sFile);
+    {$ENDIF}
+    // Never overwrite a recovery copy left by an earlier interrupted operation.
+    sBackupBase := sTmpFile;
+    BackupIndex := 0;
+    while {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sTmpFile) or
+          {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(sTmpFile) do begin
+        Inc(BackupIndex);
+        sTmpFile := sBackupBase + '.recovery-' + IntToStr(BackupIndex);
+    end;
     rRes.ModFile   := sFile;
     rRes.OrgFile   := sTmpFile;
     rRes.IsInclude := true;
 
     // ADDED(2006-02-05) Copy the unaltered file to the TEMP folder briefly...
     BackupFile(sFile, sTmpFile);
+    // Register ownership before any fallible source attribute/open/write/close step.
+    SourceFiles.Add(sFile);
+    OriginalFiles.Add(sTmpFile);
 
     // CHANGED(2006-02-05) Switched file positions for read/write...
     // Made sure to remove the write protected flag from files, if set.
     MakeFileWritable(sTmpFile);
     MakeFileWritable(sFile);
+    {$IFDEF TSLPATCHER_HEADLESS}
+    sTmpFile := NativePath(sTmpFile);
+    sFile := NativePath(sFile);
+    {$ENDIF}
     assignfile(inFile, sTmpFile);
     assignfile(outFile, sFile);
     reset(inFile);
+    try
+    {$IFDEF TSLPATCHER_HEADLESS}NotifyWrite(sFile);{$ENDIF}
     rewrite(outFile);
     try
        while not eof(inFile) do
@@ -2364,8 +2454,10 @@ begin
             writeln(outFile, sTemp);
        end;
     finally
-       closefile(inFile);
        closefile(outFile);
+    end;
+    finally
+       closefile(inFile);
     end;
 
     result := rRes;
@@ -2396,6 +2488,8 @@ procedure TTSLPatcher.DoCompileFiles();
 var
    oFileList  : TStringList;
    oOrgList   : TStringList;
+   oSourceList: TStringList;
+   PendingFailure: Exception;
    oTempList  : TStringList;
    oTokens    : TStringTokenizer;
    oERF       : TERFHandler;
@@ -2406,7 +2500,7 @@ var
    sFile      : string;
    sFileBase  : string;
    sApp       : string;
-   sParam     : string;
+   {$IFNDEF TSLPATCHER_HEADLESS}sParam : string;{$ENDIF}
    sFlags     : string;
    sNcsFile   : string;
    sFeedback  : string;
@@ -2457,14 +2551,32 @@ var
     end;
 
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    procedure PruneEmptyBackupParents(const BackupFileName: string);
+    var Folder, Root: string;
+    begin
+        {$IFDEF TSLPATCHER_HEADLESS}
+        Folder := ExcludeTrailingPathDelimiter(ExtractFilePath(NativePath(BackupFileName)));
+        Root := ExcludeTrailingPathDelimiter(NativePath(sWorkFldr));
+        {$ELSE}
+        Folder := ExcludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(BackupFileName)));
+        Root := ExcludeTrailingPathDelimiter(ExpandFileName(sWorkFldr));
+        {$ENDIF}
+        while (Folder <> Root) and
+              (Copy(Folder, 1, Length(Root) + 1) = Root + PathDelim) do begin
+            // RemoveDir removes empty directories only; never traverse unknown files.
+            if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.RemoveDir(Folder) then Exit;
+            Folder := ExtractFileDir(Folder);
+        end;
+    end;
+
     procedure DeleteTempFiles();
     var
       iTempIdx : integer;
     begin
         if (oTempList <> nil) then begin
             for iTempIdx := 0 to (oTempList.Count - 1) do begin
-                if SysUtils.FileExists(oTempList[iTempIdx]) then begin
-                    SysUtils.DeleteFile(oTempList[iTempIdx]);
+                if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(oTempList[iTempIdx]) then begin
+                    {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(oTempList[iTempIdx]);
                 end;
             end;
 
@@ -2478,6 +2590,8 @@ begin
 
      oFileList := TStringList.Create();
      oOrgList  := TStringList.Create();
+     oSourceList := TStringList.Create();
+     PendingFailure := nil;
      oTempList := TStringList.Create();
      try
         l_ini.ReadSection('CompileList', oFileList);
@@ -2489,17 +2603,21 @@ begin
             // the tslpatchdata folder even if the files for this Setup is located in a
             // sub-folder.
             // sApp := l_datapath + 'nwnnsscomp.exe';
+            {$IFDEF TSLPATCHER_HEADLESS}
+            sApp := NativePath(CompilerPath);
+            {$ELSE}
             sApp := l_path + 'tslpatchdata\nwnnsscomp.exe';
+            {$ENDIF}
 
 
-            if not FileExists(sApp) then begin
+            if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sApp) then begin
                 AddLogLine(LS_LOG_NCSCOMPILERMISSING, LOG_LEVEL_ERROR);
                 exit;
             end;
 
             // ADDED(2006-02-05) Create Script TEMP folder if it doesn't already exist.
             sWorkFldr := l_datapath + 'nsspatch_temp\';
-            ForceDirectories(sWorkFldr);
+            {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(sWorkFldr);
 
             // ADDED(2006-09-28) Check if a !DefaultDestination key exists within the
             // CompileList, and if so set it to be the default destination. This will be
@@ -2551,8 +2669,7 @@ begin
 
                         // CHANGED(2006-02-05) Replaced string parameter with Record to keep
                         // track of file type and original file as well...
-                        rFile := ReplaceTokensInFile(sFile);
-                        oOrgList.Add(rFile.OrgFile);
+                        rFile := ReplaceTokensInFile(sFile, oOrgList, oSourceList);
                         AddLogLine(Format(LS_LOG_NCSPROCESSINGTOKENS, [ExtractFileName(rFile.ModFile)]), LOG_LEVEL_VERBOSE);
 
                         // CHANGED(2006-07-20) Use the file name as set in the INI file here,
@@ -2560,13 +2677,17 @@ begin
                         // file returned from the dlgOpen object may now have another name.
                         // sFileBase := copy(sFile, 1, Pos(ExtractFileExt(sFile), sFile) - 1);
                         // CHANGED(2006-08-09) Not any more! Allow custom target names to be set as well...
+                        {$IFDEF TSLPATCHER_HEADLESS}
+                        sFileBase := NativePath(ChangeFileExt(l_datapath + GetSaveFileName(sFileName), '.ncs'));
+                        {$ELSE}
                         sFileBase := l_datapath + GetSaveFileName(sFileName); //sFileName;
                         sFileBase := copy(sFileBase, 1, Pos(ExtractFileExt(sFileBase), sFileBase) - 1);
                         sFileBase := sFileBase + '.ncs';
+                        {$ENDIF}
 
                         // CHANGED(2006-02-05) Skip compile part if the NSS file is assumed
                         // to be an include file.
-                        if FileExists(rFile.ModFile) and not rFile.IsInclude then begin
+                        if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(rFile.ModFile) and not rFile.IsInclude then begin
                             // Build commandline to run nwnnsscomp.exe....
                             // ADDED(2006-01-14) Allow specifying extra commandline flags to make it
                             // more compatible with all versions of nwnnsscomp.exe that are in use.
@@ -2579,7 +2700,9 @@ begin
                                     sFlags := sFlags + ' ';
                             end;
 
+                            {$IFNDEF TSLPATCHER_HEADLESS}
                             sParam := sFlags + '-c "' + rFile.ModFile + '" -o "' + sFileBase + '"';
+                            {$ENDIF}
 
                             AddLogLine(Format(LS_LOG_NCSCOMPILINGSCRIPT, [ExtractFileName(rFile.ModFile)]), LOG_LEVEL_INFORMATION);
 
@@ -2596,7 +2719,11 @@ begin
                             //                 with the tk102 edition of nwnnsscomp.exe.
                             // CHANGED(2006-08-12) Keep the current folder set after compilation...
                             sCurr := SysUtils.GetCurrentDir();
-                            sFeedback := RunShellGetOutput(sApp, sParam, l_path + 'tslpatchdata\'{l_datapath});
+                            {$IFDEF TSLPATCHER_HEADLESS}
+                            sFeedback := RunNativeCompiler(sApp, sFlags, l_datapath, rFile.ModFile, sFileBase);
+                            {$ELSE}
+                            sFeedback := RunShellGetOutput(sApp, sParam, l_path + 'tslpatchdata\');
+                            {$ENDIF}
                             SysUtils.SetCurrentDir(sCurr);
 
                             // TODO: This is FUGLY, update the StringTokenizer class instead to support
@@ -2613,7 +2740,7 @@ begin
 
                             sNcsFile := ExtractFileName(sFileBase);
 
-                            if FileExists(l_datapath + sNcsFile) then begin
+                            if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists({$IFDEF TSLPATCHER_HEADLESS}sFileBase{$ELSE}l_datapath + sNcsFile{$ENDIF}) then begin
                                 // ADDED(2006-02-03) See if there is a special section for this
                                 // file which defines it should be written to an ERF instead of
                                 // ze override folder.
@@ -2628,26 +2755,26 @@ begin
                                 if (lowercase(sDest) <> 'override') then begin
                                     // REMOVED(2006-08-06) Don't use ERFs in tslpatchdata any longer,
                                     // dlgopen.Execute will check if the ERF/RIM file is in place.
-                                    //if not SysUtils.FileExists(l_datapath + sDest) then begin
+                                    //if not FileExists(l_datapath + sDest) then begin
                                     //    AddLogLine('Unable to save file "' + sNcsFile + '" in ERF archive "' + sDest + '", the ERF file could not be found!', LOG_LEVEL_ERROR);
                                     //    continue;
                                     //end;
 
                                     // Create TEMP folder if it doesn't already exist.
                                     sTempFldr := IncludeTrailingPathDelimiter(l_datapath + 'erfpatch_temp');
-                                    ForceDirectories(sTempFldr);
+                                    {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(sTempFldr);
 
                                     // Move the compiled NCS file to TEMP folder.
-                                    if SysUtils.FileExists(sTempFldr + sNcsFile) then begin
-                                        DeleteFile(sTempFldr + sNcsFile);
+                                    if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sTempFldr + sNcsFile) then begin
+                                        {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(sTempFldr + sNcsFile);
                                     end;
                                     BackupFile(sFileBase, sTempFldr + sNcsFile);
-                                    DeleteFile(sFileBase);
+                                    {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(sFileBase);
 
                                     // ADDED(2006-08-06) Make backup of destination ERF/RIM before modifying,
                                     // if it has not already been done.
                                     if l_dlgopen.DoDestBackup() then
-                                        AddLogLine(Format(LS_LOG_NCSDESTBACKUP, [ExtractFileName(l_dlgopen.Destination), IncludeTrailingPathDelimiter(l_path + 'backup')]), LOG_LEVEL_INFORMATION);
+                                        AddLogLine(Format(LS_LOG_NCSDESTBACKUP, [ExtractFileName(l_dlgopen.Destination), IncludeTrailingPathDelimiter(l_backuproot)]), LOG_LEVEL_INFORMATION);
 
                                     // Write the file to the ERF!
                                     // TODO: This is not good. It's hideously inefficient to reload/save the ERF for
@@ -2725,12 +2852,12 @@ begin
                                     // FIX(2006-01-29) Remove ReadOnly flag before trying to delete...
                                     if (bOverwrite) then begin
                                        MakeFileWritable(l_dlgopen.InstallPath + 'override\' + sNcsFile);
-                                       DeleteFile(l_dlgopen.InstallPath + 'override\' + sNcsFile);
+                                       {$IFNDEF TSLPATCHER_HEADLESS}{$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(l_dlgopen.InstallPath + 'override\' + sNcsFile);{$ENDIF}
                                     end;
 
                                     // Move the compiled file to override.
                                     BackupFile(sFileBase, l_dlgopen.InstallPath + 'override\' + sNcsFile);
-                                    DeleteFile(sFileBase);
+                                    {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(sFileBase);
                                 end;
                             end
                             else begin
@@ -2748,54 +2875,76 @@ begin
                     end;
                     IncrementProgress(1);
                 end;
-            // ADDED(2006-09-29) Added try...finally here to make sure any open ERF file is closed.
-            finally
-                if (oERF <> nil) and bOpenERF then begin
-                    // FIX(2006-10-01) I Forgot to save any open file before freeing it... DOH!
-                    if oERF.Loaded then begin
+            except
+                on E: Exception do PendingFailure := Exception(AcquireExceptionObject);
+            end;
+            try
+                try
+                    if (oERF <> nil) and bOpenERF and oERF.Loaded then begin
                         AddLogLine(Format(LS_LOG_NCSSAVEERFRIM, [ExtractFileName(oERF.FileName)]), LOG_LEVEL_VERBOSE);
                         oERF.Save();
-
-                        // FIX(2006-10-01) Remove the compiled files after the ERF/RIM has been saved!
-                        DeleteTempFiles();
                     end;
-                        
-                    oERF.Free();
+                except
+                    on E: Exception do
+                        if PendingFailure = nil then PendingFailure := Exception(AcquireExceptionObject);
                 end;
-
-                // CHANGED(2006-09-29) Put below code inside the Finally stage as well to make sure
-                // the original scripts are put back no matter what happens above, otherwise subsequent
-                // installation attempts may fail if the scripts are not moved back manually.
-                
-                // ADDED(2006-04-17) Special debug setting that makes the patcher keep a copy of any
-                // processed script source files for inspection. They are usually deleted once the
-                // scripts have been compiled.
-                bDebugFiles := l_ini.ReadBool('Settings', 'SaveProcessedScripts', false);
-
-                // ADDED(2006-02-05) Put the original, unaltered files back into the
-                // tslpatchdata folder, overwriting the modified copies.
-                for i := 0 to (oOrgList.Count - 1) do begin
-                    // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-                    // ADDED(2006-04-17) Keep files for debugging if option is set...
-                    if bDebugFiles then begin
-                        ForceDirectories(IncludeTrailingPathDelimiter(l_datapath + 'debug'));
-                        BackupFile(l_datapath + ExtractFileName(oOrgList[i]), IncludeTrailingPathDelimiter(l_datapath + 'debug') + ExtractFileName(oOrgList[i]));
+            finally
+                try
+                    try
+                        FreeAndNil(oERF);
+                    except
+                        on E: Exception do
+                            if PendingFailure = nil then PendingFailure := Exception(AcquireExceptionObject);
                     end;
-                    // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-                    if SysUtils.FileExists(oOrgList[i]) then begin
-                        BackupFile(oOrgList[i], l_datapath + ExtractFileName(oOrgList[i]));
-                        SysUtils.DeleteFile(oOrgList[i]);
+                finally
+                    try
+                        try
+                            DeleteTempFiles();
+                        except
+                            on E: Exception do
+                                if PendingFailure = nil then PendingFailure := Exception(AcquireExceptionObject);
+                        end;
+                    finally
+                        // Restore each source even when archive capture/save was rejected.
+                        bDebugFiles := l_ini.ReadBool('Settings', 'SaveProcessedScripts', false);
+                        for i := 0 to oOrgList.Count - 1 do begin
+                            try
+                                if bDebugFiles then begin
+                                    {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(IncludeTrailingPathDelimiter(l_datapath + 'debug'));
+                                    BackupFile(oSourceList[i], IncludeTrailingPathDelimiter(l_datapath + 'debug') + ExtractFileName(oOrgList[i]));
+                                end;
+                            except
+                                on E: Exception do
+                                    if PendingFailure = nil then PendingFailure := Exception(AcquireExceptionObject);
+                            end;
+                            try
+                                if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(oOrgList[i]) then begin
+                                    BackupFile(oOrgList[i], oSourceList[i]);
+                                    {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(oOrgList[i]);
+                                    PruneEmptyBackupParents(oOrgList[i]);
+                                end;
+                            except
+                                on E: Exception do begin
+                                    if PendingFailure = nil then PendingFailure := Exception(AcquireExceptionObject);
+                                end;
+                            end;
+                        end;
+                        try
+                            // Nonrecursive: unknown or failed recovery files must survive.
+                            {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.RemoveDir(sWorkFldr);
+                        except
+                            on E: Exception do
+                                if PendingFailure = nil then PendingFailure := Exception(AcquireExceptionObject);
+                        end;
                     end;
                 end;
-
-                // ADDED(2006-02-05) Remove the TEMP folder when done working...
-                SysUtils.RemoveDir(sWorkFldr);
             end;
+            if PendingFailure <> nil then raise PendingFailure;
         end;
      finally
          oFileList.free();
          oOrgList.free();
+         oSourceList.free();
 
          if (oTempList <> nil) then
              oTempList.free();
@@ -2848,7 +2997,7 @@ begin
             // Get the filename & path of the file to modify...
             if (sFilename <> '') and l_dlgOpen.Execute(sFilename, fileSSF, bOverwrite) then begin
                 // Doublecheck that the file actually exists before proceeding.
-                if not SysUtils.FileExists(l_dlgOpen.FilePath) then begin
+                if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_dlgOpen.FilePath) then begin
                     AddLogLine(Format(LS_LOG_SSFFILENOTFOUND, [sFilename]), LOG_LEVEL_ALERT);
                     continue;
                 end;
@@ -2993,7 +3142,28 @@ end;
 // CHANGED(2006-02-07) Changed to function returning the number or errors and
 // warnings encountered.
 // -----------------------------------------------------------------------------
-function TTSLPatcher.RunPatchOperation() : TPatcherResult;
+function TTSLPatcher.RunPatchOperation: TPatcherResult;
+{$IFDEF TSLPATCHER_HEADLESS}
+var PreviousHook: TPatcherBeforeWrite; PreviousRoot: string;
+{$ENDIF}
+begin
+    {$IFDEF TSLPATCHER_HEADLESS}
+    PreviousHook := UPatcherPlatform.BeforeWrite;
+    PreviousRoot := UPatcherPlatform.WriteRoot;
+    UPatcherPlatform.BeforeWrite := BeforeWrite;
+    UPatcherPlatform.WriteRoot := l_dlgopen.InstallPath;
+    try
+    {$ENDIF}
+        Result := RunPatchOperationInternal;
+    {$IFDEF TSLPATCHER_HEADLESS}
+    finally
+        UPatcherPlatform.BeforeWrite := PreviousHook;
+        UPatcherPlatform.WriteRoot := PreviousRoot;
+    end;
+    {$ENDIF}
+end;
+
+function TTSLPatcher.RunPatchOperationInternal: TPatcherResult;
 var
    oFileList   : TStringList;
    oChangeList : TStringList;
@@ -3049,7 +3219,7 @@ begin
                  if ((sFileName <> '') and l_dlgopen.Execute(sFilename, file2da)) then begin
                     // TODO: WTF? Shouldn't there be an exception here?
                     // CHANGED(2006-07-20) Added log-error if the file could not be found...
-                    if (FileExists(l_dlgopen.FilePath) = False) then begin
+                    if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_dlgopen.FilePath) = False) then begin
                        AddLogLine(Format(LS_LOG_2DAFILENOTFOUND, [ExtractFileName(l_dlgopen.FilePath)]), LOG_LEVEL_ERROR);
                        break;
                     end;
@@ -3092,7 +3262,7 @@ begin
                             end;
 
                             if l_dlgopen.DoBackup() then
-                               AddLogLine(Format(LS_LOG_2DABACKUPFILE, [l_dlgopen.FileName, IncludeTrailingPathDelimiter(l_path + 'backup') + sFilename]), LOG_LEVEL_INFORMATION);
+                               AddLogLine(Format(LS_LOG_2DABACKUPFILE, [l_dlgopen.FileName, IncludeTrailingPathDelimiter(l_backuproot) + sFilename]), LOG_LEVEL_INFORMATION);
 
                             // Save the changed 2da file.
                             l_2da.Save2daFile(l_dlgopen.FilePath);
@@ -3129,7 +3299,7 @@ begin
              UpdateSffFiles();
 
              // ADDED(2006-02-03) Delete the TEMP folder when done working, if it is empty...
-             SysUtils.RemoveDir(IncludeTrailingPathDelimiter(l_datapath + 'erfpatch_temp'));
+             {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.RemoveDir(IncludeTrailingPathDelimiter(l_datapath + 'erfpatch_temp'));
 
              // ADDED(2006-02-07) Added function return value...
              rRes.Warnings := l_logalerts;
@@ -4052,13 +4222,13 @@ begin
 
     // Ask for the file...
     if (l_dlgopen.Execute(sFile, fileHack, bReplace)) then begin
-        if not FileExists(l_dlgopen.FilePath) then begin
+        if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_dlgopen.FilePath) then begin
            AddLogLine(Format(LS_LOG_HAKNOVALIDFILE, [sFile]), LOG_LEVEL_ERROR);
            exit;
         end;
 
         if l_dlgopen.DoBackup() then
-           AddLogLine(Format(LS_LOG_HAKBACKUPFILE, [l_dlgopen.FileName, IncludeTrailingPathDelimiter(l_path + 'backup')]), LOG_LEVEL_INFORMATION);
+           AddLogLine(Format(LS_LOG_HAKBACKUPFILE, [l_dlgopen.FileName, IncludeTrailingPathDelimiter(l_backuproot)]), LOG_LEVEL_INFORMATION);
 
         // Open the file in append-write mode...
         MakeFileWritable(l_dlgopen.FilePath);
@@ -4171,7 +4341,7 @@ begin
 
      // If the patcher isn't running in Installer mode, there is no point
      // in doing any of this...
-     if (l_ini.ReadBool('Settings', 'InstallerMode', False) = False) then
+     if not l_dlgopen.InstallMode then
         exit;
 
      sPath := l_dlgopen.InstallPath;
@@ -4191,7 +4361,7 @@ begin
                  // ADDED(2006-08-09) Attempt to verify if the install destination
                  // is a valid ERF/RIM file or if it's a folder path.
                  bIsArchive := false;
-                 if SysUtils.FileExists(sPath + sFolder) then begin
+                 if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sPath + sFolder) then begin
                      if TERFHandler.IsValidArchive(sPath + sFolder) then begin
                          bIsArchive := true;
                      end
@@ -4203,7 +4373,7 @@ begin
                  else begin
                      // Check if it's a folder that does not exist (OK) or a destination
                      // archive file that does not exist (not OK).
-                     if  not DirectoryExists(sPath + sFolder) then begin
+                     if  not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(sPath + sFolder) then begin
                         sExt := ExtractFileExt(sPath + sFolder);
                         if (Length(sExt) > 1) and (sExt[1] = '.') then begin
                             AddLogLine(Format(LS_LOG_INSDESTNOTEXIST, [sFolder]), LOG_LEVEL_ERROR);
@@ -4229,14 +4399,14 @@ begin
                  then begin
                      // ADDED(2006-01-24) Create folder(s) if they do not already exist...
                      // CHANGED(2006-08-09) Skip this part if the destination is a file...
-                     if  (not bIsArchive) and (not DirectoryExists(sPath + sFolder)) then begin
+                     if  (not bIsArchive) and (not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(sPath + sFolder)) then begin
                          AddLogLine(Format(LS_LOG_INSCREATEFOLDER, [sPath + sFolder]), LOG_LEVEL_INFORMATION);
-                         ForceDirectories(sPath + sFolder);
+                         {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(sPath + sFolder);
                      end;
 
                      // ADDED(2006-01-24) Failsafe in case something went wrong above...
                      // CHANGED(2006-08-09) Skip this part if the destination is a file...
-                     if  (not bIsArchive) and (not DirectoryExists(sPath + sFolder)) then begin
+                     if  (not bIsArchive) and (not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(sPath + sFolder)) then begin
                          AddLogLine(Format(LS_LOG_INSFOLDERCREATEFAIL, [sPath + sFolder]), LOG_LEVEL_ERROR);
                          continue;
                      end;
@@ -4252,7 +4422,7 @@ begin
                              if bIsArchive then begin
                                  l_dlgopen.Destination := sPath + sFolder;
                                  if l_dlgopen.DoDestBackup() then
-                                     AddLogLine(Format(LS_LOG_INSBACKUPFILE, [ExtractFileName(l_dlgopen.Destination), IncludeTrailingPathDelimiter(l_path + 'backup')]), LOG_LEVEL_INFORMATION);
+                                     AddLogLine(Format(LS_LOG_INSBACKUPFILE, [ExtractFileName(l_dlgopen.Destination), IncludeTrailingPathDelimiter(l_backuproot)]), LOG_LEVEL_INFORMATION);
 
                                  oERF := TERFHandler.Create(sPath + sFolder);
                              end;
@@ -4288,13 +4458,13 @@ begin
 
                                  // Copy file from the tslpatchdata folder, if it exists....
                                  // FIX(2006-08-09) Check for the source file, not the modifier file name...
-                                 if (sFile <> '') and FileExists(l_datapath + sOrig) then begin
+                                 if (sFile <> '') and {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sOrig) then begin
                                      // REMOVED(2006-08-09 Replaced with above function call...
                                      (*
                                      if l_ini.SectionExists(sFile) then begin
                                          sRename := l_ini.ReadString(sFile, '!SourceFile', '');
                                          if (sRename <> '') then begin
-                                             if SysUtils.FileExists(l_datapath + sRename) then begin
+                                             if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sRename) then begin
                                                  sOrig := sRename;
                                              end
                                              else begin
@@ -4307,7 +4477,7 @@ begin
 
                                      if not bIsArchive then begin
                                          // File already exists, won't overwrite anything just to be safe...
-                                         if FileExists(sPath + sFolder + '\' + sFile) then begin
+                                         if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sPath + sFolder + '\' + sFile) then begin
                                              // ADDED(2005-06-09) Allow replacing existing files...
                                              if (lowercase(copy(sKey, 1, 7)) = 'replace') then begin
                                                  // ADDED(2005-06-10) Don't allow the Installer to mess with the game binaries or the dialog.tlk file.
@@ -4339,11 +4509,11 @@ begin
 
                                                  if (l_dlgopen.DoBackups = True) then begin
                                                      // FIX(2006-09-03) Create Backup folder if it doesn't already exist...
-                                                     ForceDirectories(l_path + 'backup\');
-                                                     BackupFile(sPath + sFolder + '\' + sFile, l_path + 'backup\' + sFile);
+                                                     {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(l_backuproot);
+                                                     BackupFile(sPath + sFolder + '\' + sFile, l_backuproot + sFile);
                                                  end;
 
-                                                 DeleteFile(sPath + sFolder + '\' + sFile);
+                                                 {$IFNDEF TSLPATCHER_HEADLESS}{$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(sPath + sFolder + '\' + sFile);{$ENDIF}
                                                  BackupFile(l_datapath + sOrig, sPath + sFolder + '\' + sFile);
                                                  IncrementProgress(1);
 
@@ -4423,7 +4593,7 @@ begin
                                      end;
                                  end
                                  else begin
-                                     AddLogLine(Format(LS_LOG_INSCOPYFAILED, [sFile]), LOG_LEVEL_ALERT);
+                                     AddLogLine(Format(LS_LOG_INSCOPYFAILED, [sFile]), {$IFDEF TSLPATCHER_HEADLESS}LOG_LEVEL_ERROR{$ELSE}LOG_LEVEL_ALERT{$ENDIF});
                                  end;
                              end;
 
@@ -4468,7 +4638,7 @@ begin
     if (l_ini <> nil) and l_ini.SectionExists(sFile) then begin
         sRename := l_ini.ReadString(sFile, '!SourceFile', '');
         if (sRename <> '') then begin
-            if SysUtils.FileExists(l_datapath + sRename) then begin
+            if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sRename) then begin
                 sFile := sRename;
             end
             else begin
@@ -4513,11 +4683,13 @@ end;
 // 2005-05-28
 // Constructor - create object and set attributes to their default values.
 // -----------------------------------------------------------------------------
-constructor TPatchFileHandler.Create(oBox : TOpenDialog; sPath : string);
+constructor TPatchFileHandler.Create(oBox : {$IFDEF TSLPATCHER_HEADLESS}TObject{$ELSE}TOpenDialog{$ENDIF}; sPath : string);
 begin
     inherited Create();
 
+    {$IFNDEF TSLPATCHER_HEADLESS}
     l_dlgbox      := oBox;
+    {$ENDIF}
     l_installpath := '';
     l_currentpath := '';
     l_currentfile := '';
@@ -4555,7 +4727,7 @@ begin
     if (l_currentfile = '') then
         raise EAbort.CreateHelp(LS_EXC_FHNOSOURCEFILESET, 4);
 
-    if not SysUtils.FileExists(l_currentpath + l_currentfile) then
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_currentpath + l_currentfile) then
         raise EAbort.CreateHelp(Format(LS_EXC_FHSOURCEDONTEXIST, [l_currentpath + l_currentfile]), 5);
 
     result := l_currentpath + l_currentfile;
@@ -4582,16 +4754,16 @@ begin
     if not l_backupfile then
        exit;
 
-    if not DirectoryExists(l_basepath + 'backup\') then
-        ForceDirectories(l_basepath + 'backup\');
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_backuproot) then
+        {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(l_backuproot);
 
     // ADDED(2006-08-09) Allow using destination file with different name than the
     // one that it will be installed from.
     sFile := TTSLPatcher(l_parentclass).GetSaveFileName(l_currentfile);
 
     // CHANGED(2006-08-09) Using sFile instead of l_currentfile. Added extra Exists check for source.
-    if not FileExists(l_basepath + 'backup\' + sFile) and FileExists(l_currentpath + sFile) then begin
-        BackupFile(l_currentpath + sFile, l_basepath + 'backup\' + sFile);
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_backuproot + sFile) and {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_currentpath + sFile) then begin
+        BackupFile(l_currentpath + sFile, l_backuproot + sFile);
         result := True;
     end;
 end;
@@ -4610,17 +4782,17 @@ begin
     if (lowercase(l_destination) = 'override') then
         exit;
 
-    if not SysUtils.FileExists(l_destination) then
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_destination) then
         exit;
 
-    if not DirectoryExists(l_basepath + 'backup\') then
-        ForceDirectories(l_basepath + 'backup\');
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_backuproot) then
+        {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(l_backuproot);
 
-    if not DirectoryExists(l_basepath + 'backup\modules\') then
-        ForceDirectories(l_basepath + 'backup\modules\');
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_backuproot + 'modules\') then
+        {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(l_backuproot + 'modules\');
     // CHANGED(2006-08-09) Check if source file exists as well...
-    if not FileExists(l_basepath + 'backup\' + ExtractFileName(l_destination)) and FileExists(l_destination) then begin
-        BackupFile(l_destination, l_basepath + 'backup\' + ExtractFileName(l_destination));
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_backuproot + ExtractFileName(l_destination)) and {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_destination) then begin
+        BackupFile(l_destination, l_backuproot + ExtractFileName(l_destination));
         result := True;
     end;
 end;
@@ -4637,7 +4809,8 @@ var
    iVersion : integer;
    bPathtrue : integer;
 begin
-    if (l_installpath = '') or not DirectoryExists(l_installpath) then begin
+    bPathtrue := 0;
+    if (l_installpath = '') or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath) then begin
         // ADDED(2006-05-28) Added Settings key to read the game install folder from
         // the Registry instead of asking the user for the folder. Off by default.
         bLookup := TTSLPatcher(l_parentclass).l_ini.ReadBool('Settings', 'LookupGameFolder', false);
@@ -4649,14 +4822,14 @@ begin
                 l_installpath := GetRegistryString('\SOFTWARE\LucasArts\KotOR2', 'Path');
 
             // Fallback if the Registry lookup failed for whatever reason.
-            if (l_installpath = '') or not DirectoryExists(l_installpath) then
+            if (l_installpath = '') or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath) then
                 l_installpath := OpenFolderDialog(LS_DLG_SELECTINSTALLFOLDER, 0);
         end
         else begin
             l_installpath := OpenFolderDialog(LS_DLG_SELECTINSTALLFOLDER, 0);
         end;
 
-        if (l_installpath = '') or not DirectoryExists(l_installpath) then
+        if (l_installpath = '') or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath) then
             raise EAbort.CreateHelp(LS_EXC_FHINVALIDGAMEFOLDER, 10);
 
         // Backslash after last folder is missing for some reason, so add it...
@@ -4666,15 +4839,15 @@ begin
         //    l_installpath := l_installpath + '\';
 
         // Check if dialog.tlk exists within the specified folder....
-        if not FileExists(l_installpath + 'dialog.tlk') then bPathtrue := bPathtrue + 0;
-        if (DirectoryExists(l_installpath + 'override')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'movies')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'modules')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'streamwaves')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'streammusic')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'streamsounds')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'streamvoice')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'lips')) then bPathtrue := bPathtrue + 1;
+        if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_installpath + 'dialog.tlk') then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'override')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'movies')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'modules')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'streamwaves')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'streammusic')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'streamsounds')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'streamvoice')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'lips')) then bPathtrue := bPathtrue + 1;
 
         if(bPathtrue = 0) then raise EAbort.CreateHelp(LS_EXC_FHTALKYMANNOTFOUND, 11);
 
@@ -4717,6 +4890,7 @@ var
    oERF         : TERFHandler;
 begin
     result := False;
+    bPathtrue := 0;
     l_backupfile := True;
 
     // ADDED(2006-08-06) If the sDest parameter isn't set, set its value to 'override'.
@@ -4736,6 +4910,7 @@ begin
 
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     // Configure the Open File dialog box, in case it should be used...
+    {$IFNDEF TSLPATCHER_HEADLESS}
     if (patchType = fileTlk) then begin
         l_dlgbox.FileName := sFilename;
         l_dlgbox.DefaultExt := 'tlk';
@@ -4790,6 +4965,7 @@ begin
 
 
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    {$ENDIF}
     // The patcher is running in Installer mode... Automatically find and patch the files in
     // the Override folder. If they don't already exist in Override, copy them there from the
     // TSLPatchData folder if they exist there.
@@ -4798,7 +4974,7 @@ begin
         // The Install path (aka game directory) has not already been set. Ask the user
         // to select the folder the game is located in. Check for presence of dialog.tlk
         // to verify that it is the right one.
-        if (l_installpath = '') or not DirectoryExists(l_installpath) then begin
+        if (l_installpath = '') or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath) then begin
             // ADDED(2006-05-28) Added Settings key to read the game install folder from
             // the Registry instead of asking the user for the folder. Off by default.
             bLookup := TTSLPatcher(l_parentclass).l_ini.ReadBool('Settings', 'LookupGameFolder', false);
@@ -4810,29 +4986,29 @@ begin
                     l_installpath := GetRegistryString('\SOFTWARE\LucasArts\KotOR2', 'Path');
 
                 // Fallback if the Registry lookup failed for whatever reason.
-                if (l_installpath = '') or not DirectoryExists(l_installpath) then
+                if (l_installpath = '') or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath) then
                     l_installpath := OpenFolderDialog(LS_DLG_SELECTINSTALLFOLDER, 0);
             end
             else begin
                 l_installpath := OpenFolderDialog(LS_DLG_SELECTINSTALLFOLDER, 0);
             end;
 
-            if (l_installpath = '') or not DirectoryExists(l_installpath) then
+            if (l_installpath = '') or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath) then
                 raise EAbort.CreateHelp(LS_EXC_FHNODESTSELECTED, 6);
 
             // Backslash after last folder is missing for some reason, so add it...
             l_installpath := IncludeTrailingPathDelimiter(l_installpath);
 
             // Check if dialog.tlk exists within the specified folder....
-        if not FileExists(l_installpath + 'dialog.tlk') then bPathtrue := bPathtrue + 0;
-        if (DirectoryExists(l_installpath + 'override')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'movies')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'modules')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'streamwaves')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'streammusic')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'streamsounds')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'streamvoice')) then bPathtrue := bPathtrue + 1;
-        if (DirectoryExists(l_installpath + 'lips')) then bPathtrue := bPathtrue + 1;
+        if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_installpath + 'dialog.tlk') then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'override')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'movies')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'modules')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'streamwaves')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'streammusic')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'streamsounds')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'streamvoice')) then bPathtrue := bPathtrue + 1;
+        if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_installpath + 'lips')) then bPathtrue := bPathtrue + 1;
 
         if(bPathtrue = 0) then raise EAbort.CreateHelp(LS_EXC_FHTALKYMANNOTFOUND, 7);
 
@@ -4852,7 +5028,7 @@ begin
         if (l_parentclass <> nil) and (l_parentclass is TTSLPatcher) then begin
             sRequired    := TTSLPatcher(l_parentclass).l_ini.ReadString('Settings', 'Required', '');
             if (sRequired <> '') then begin
-                if not SysUtils.FileExists(IncludeTrailingPathDelimiter(l_installpath + 'override') + sRequired) then begin
+                if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(IncludeTrailingPathDelimiter(l_installpath + 'override') + sRequired) then begin
                     sRequiredMsg := TTSLPatcher(l_parentclass).l_ini.ReadString('Settings', 'RequiredMsg', '');
                     if (sRequiredMsg = '') then begin
                         raise EAbort.CreateHelp(Format(LS_EXC_FHREQFILEMISSING, [sRequired]), 99);
@@ -4873,7 +5049,7 @@ begin
         // Since it is used to locate the Override folder, don't allow the user to specify
         // another, just abort everything if it is missing.
         if (patchType = fileTlk) then begin
-            if FileExists(l_installpath + sFilename) then begin
+            if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_installpath + sFilename) then begin
                 l_currentfile := sFileName;
                 l_currentpath := l_installpath;
                 result := True;
@@ -4887,8 +5063,8 @@ begin
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // Override folder doesn't already exist, create it.
-        if not DirectoryExists(IncludeTrailingPathDelimiter(l_installpath + 'override')) then begin
-           ForceDirectories(IncludeTrailingPathDelimiter(l_installpath + 'override'));
+        if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(IncludeTrailingPathDelimiter(l_installpath + 'override')) then begin
+           {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(IncludeTrailingPathDelimiter(l_installpath + 'override'));
            AddLogLine(Format(LS_LOG_FHMAKEOVERRIDE, [IncludeTrailingPathDelimiter(l_installpath + 'override')]), LOG_LEVEL_INFORMATION);
         end;
                 
@@ -4912,7 +5088,7 @@ begin
             l_destination := IncludeTrailingPathDelimiter(l_installpath) + sDest;
 
             // ADDED(2006-08-06) Check if the archive ERF/RIM exists first.
-            if not SysUtils.FileExists(l_destination) then begin
+            if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_destination) then begin
                 AddLogLine(Format(LS_LOG_FHDESTFILENOTFOUND, [l_destination, l_currentfile]), LOG_LEVEL_ERROR);
                 result := False;
                 exit;
@@ -4940,7 +5116,7 @@ begin
 
                 // Create a temp working folder to modify the files in.
                 l_currentpath := IncludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(l_datapath) + 'erfpatch_temp');
-                ForceDirectories(l_currentpath);
+                {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(l_currentpath);
 
                 // ADDED(2006-08-09) Allow using destination file with different name than the
                 // one that it will be installed from.
@@ -4948,8 +5124,8 @@ begin
 
                 // CHANGED(2006-08-09) Using sSaveAs instead a filename.
                 // If a file with this name already exists in the TEMP folder, delete it.
-                if FileExists(l_currentpath + sSaveAs{l_currentfile}) then begin
-                    DeleteFile(l_currentpath + sSaveAs{l_currentfile});
+                if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_currentpath + sSaveAs{l_currentfile}) then begin
+                    {$IFNDEF TSLPATCHER_HEADLESS}{$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(l_currentpath + sSaveAs{l_currentfile});{$ENDIF}
                 end;
 
                 // ADDED(2006-08-06) Resource with this name already exists in destination file. Extract
@@ -4980,7 +5156,7 @@ begin
                     (*
                     sRename := TTSLPatcher(l_parentclass).l_ini.ReadString(l_currentfile, '!SourceFile', '');
                     if (sRename <> '') then begin
-                        if SysUtils.FileExists(l_datapath + sRename) then begin
+                        if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sRename) then begin
                             sFilename := sRename;
                         end
                         else begin
@@ -4997,7 +5173,7 @@ begin
                 end;
 
                 // Check that the file was copied successfully to work folder...
-                if not SysUtils.FileExists(l_currentpath + sSaveAs) then begin
+                if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_currentpath + sSaveAs) then begin
                     result := false;
                     AddLogLine(Format(LS_LOG_FHTEMPFILEFAILED, [sSaveAs]), LOG_LEVEL_ERROR);
                     exit;
@@ -5029,7 +5205,7 @@ begin
                 l_destination := IncludeTrailingPathDelimiter(l_installpath) + sDest;
 
                 // ADDED(2006-08-06) Check if the archive ERF/RIM exists first.
-                if not SysUtils.FileExists(l_destination) then begin
+                if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_destination) then begin
                     AddLogLine(Format(LS_LOG_FHMISSINGARCHIVE, [l_destination, l_currentfile]), LOG_LEVEL_ERROR);
                     result := False;
                     exit;
@@ -5065,7 +5241,7 @@ begin
             if TTSLPatcher(l_parentclass).l_ini.SectionExists(sFilename) then begin
                 sRename := TTSLPatcher(l_parentclass).l_ini.ReadString(sFilename, '!SourceFile', '');
                 if (sRename <> '') then begin
-                    if SysUtils.FileExists(l_datapath + sRename) then begin
+                    if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sRename) then begin
                         l_currentfile := sRename;
                     end
                     else begin
@@ -5080,14 +5256,14 @@ begin
 
             if (bOverwrite) then begin
                 // FIX(2006-08-09) Only check if destination is override folder.
-                if (lowercase(sDest) = 'override') and FileExists(l_installpath + 'override\' + sTemp) then begin
+                if (lowercase(sDest) = 'override') and {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_installpath + 'override\' + sTemp) then begin
                    // Handle backups manually since this doesn't follow the regular pattern of use... :/
                    if l_dobackups then begin
-                       if not DirectoryExists(l_basepath + 'backup\') then
-                           ForceDirectories(l_basepath + 'backup\');
+                       if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(l_backuproot) then
+                           {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(l_backuproot);
 
-                       if not FileExists(l_basepath + 'backup\' + sTemp) then begin
-                          BackupFile(l_installpath + 'override\' + sTemp, l_basepath + 'backup\' + sTemp);
+                       if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_backuproot + sTemp) then begin
+                          BackupFile(l_installpath + 'override\' + sTemp, l_backuproot + sTemp);
                           AddLogLine(Format(LS_LOG_FHBACKUPSCRIPT, [sFilename]), LOG_LEVEL_INFORMATION);
                        end;
                    end;
@@ -5095,7 +5271,7 @@ begin
             end
             else begin
                 // FIX(2006-08-09) Only check if destination is overide folder.
-                if (lowercase(sDest) = 'override') and FileExists(l_installpath + 'override\' + sFilename) then begin
+                if (lowercase(sDest) = 'override') and {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_installpath + 'override\' + sFilename) then begin
                     AddLogLine(Format(LS_LOG_FHSCRIPTEXISTS, [sFilename]), LOG_LEVEL_ALERT);
                     result := false;
                     exit;
@@ -5129,17 +5305,17 @@ begin
             // one that it will be installed from.
             sSaveAs := TTSLPatcher(l_parentclass).GetSaveFileName(sFilename);
 
-            if FileExists(l_datapath + sOrig) then begin
+            if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sOrig) then begin
                 l_currentfile := sFilename;
                 l_currentpath := l_installpath + 'override\';
 
                 // Gör backup om filen redan existerar i Override...
                 // FIX(2005-06-12) Lagt till separata log-meddelanden beroende på om filen
                 // redan fanns eller om den bara skall kopieras.
-                if FileExists(l_currentpath + sSaveAs) then begin
+                if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_currentpath + sSaveAs) then begin
                     l_backupfile := True;
                     DoBackup();
-                    DeleteFile(l_currentpath + sSaveAs);
+                    {$IFNDEF TSLPATCHER_HEADLESS}{$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(l_currentpath + sSaveAs);{$ENDIF}
                     AddLogLine(Format(LS_LOG_FHUPDATEREPLACE, [sSaveAs]), LOG_LEVEL_INFORMATION);
                 end
                 else begin
@@ -5152,7 +5328,7 @@ begin
                 (*
                 sRename := TTSLPatcher(l_parentclass).l_ini.ReadString(l_currentfile, '!SourceFile', '');
                 if (sRename <> '') then begin
-                    if SysUtils.FileExists(l_datapath + sRename) then begin
+                    if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sRename) then begin
                         sFilename := sRename;
                     end
                     else begin
@@ -5207,14 +5383,14 @@ begin
             // one that it will be installed from.
             sSaveAs := TTSLPatcher(l_parentclass).GetSaveFileName(l_currentfile);
 
-            if not FileExists(l_currentpath + sSaveAs) then begin
+            if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_currentpath + sSaveAs) then begin
                 // ADDED(2006-07-20) Allow using source file with different name than the
                 // one that it will be installed as.
                 // REMOVED(2006-08-09) Done above in separate function instead...
                 (*
                 sRename := TTSLPatcher(l_parentclass).l_ini.ReadString(l_currentfile, '!SourceFile', '');
                 if (sRename <> '') then begin
-                    if SysUtils.FileExists(l_datapath + sRename) then begin
+                    if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sRename) then begin
                         sFilename := sRename;
                     end
                     else begin
@@ -5225,7 +5401,7 @@ begin
                 end;
                 *)
 
-                if FileExists(l_datapath + sOrig) then begin
+                if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sOrig) then begin
                     // Blueprint file found, copy it to the Override folder.
                     BackupFile(l_datapath + sOrig, l_currentpath + sSaveAs);
                     l_backupfile := False;
@@ -5269,7 +5445,7 @@ begin
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // File does not already exist in the override folder, copy it there from
         // the one in the tslpatchdata folder and then return the new copy...
-        if not FileExists(IncludeTrailingPathDelimiter(l_installpath + 'override') + sSaveAs) then begin
+        if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(IncludeTrailingPathDelimiter(l_installpath + 'override') + sSaveAs) then begin
             l_currentfile := sSaveAs;
             l_currentpath := IncludeTrailingPathDelimiter(l_installpath + 'override');
 
@@ -5279,7 +5455,7 @@ begin
             (*
             sRename := TTSLPatcher(l_parentclass).l_ini.ReadString(l_currentfile, '!SourceFile', '');
             if (sRename <> '') then begin
-                if SysUtils.FileExists(l_datapath + sRename) then begin
+                if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sRename) then begin
                     sFilename := sRename;
                 end;
             end;
@@ -5287,8 +5463,11 @@ begin
 
             // File to patch does not exist in the tslpatchdata folder! Fall back to ask
             // the user for one...
-            if not FileExists(l_datapath + sOrig) then begin
+            if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(l_datapath + sOrig) then begin
                 AddLogLine(LS_LOG_FHNOTSLPATCHDATAFILE, LOG_LEVEL_VERBOSE);
+                {$IFDEF TSLPATCHER_HEADLESS}
+                raise EAbort.Create('Source file not found: ' + NativePath(l_datapath + sOrig));
+                {$ELSE}
                 sTemp := l_dlgbox.Title;
                 l_dlgbox.Title := Format(LS_DLG_MANUALLOCATEFILE, [sSaveAs, sOrig]);
                 if (l_dlgbox.Execute()) then begin
@@ -5309,6 +5488,7 @@ begin
                     l_dlgbox.Title := sTemp;
                     raise EAbort.CreateHelp(Format(LS_EXC_FHCRITFILEMISSING, [sSaveAs]), 9);
                 end;
+                {$ENDIF}
             end
             else begin
                 // Blueprint file found, copy it to the Override folder.
@@ -5338,11 +5518,15 @@ begin
     end
     // Running in Patcher mode, ask for each file individually and patch them directly.
     else begin
+        {$IFDEF TSLPATCHER_HEADLESS}
+        raise EAbort.Create('Interactive patch mode is unavailable');
+        {$ELSE}
         if (l_dlgbox.Execute()) then begin
             l_currentfile := ExtractFileName(l_dlgbox.FileName);
             l_currentpath := ExtractFilePath(l_dlgbox.FileName);
             result := True;
         end;
+        {$ENDIF}
     end;
 end;
 
