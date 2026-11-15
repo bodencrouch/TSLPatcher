@@ -1,5 +1,7 @@
 # Building And Launching TSLPatcher
 
+For the native Windows/Linux console target, see [CLI.md](CLI.md). Its FPC Delphi-mode build runs the original engine without VCL; the GUI instructions below apply to the separate default Delphi project.
+
 This document describes how the repository is built and launched today, what the runtime expects beside the executable, and what the committed VS Code workflow does on Windows versus Linux or macOS.
 
 ## Source Of Truth

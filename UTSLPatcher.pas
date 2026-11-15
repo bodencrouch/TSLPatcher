@@ -828,6 +828,8 @@ end;
 // Destructor - free the 2da and INI handler objects.
 // -----------------------------------------------------------------------------
 {$IFDEF TSLPATCHER_HEADLESS}
+{ Headless callers must preflight Required/RequiredN file groups and path
+  confinement before construction. UCLIConfig performs that CLI validation. }
 constructor TTSLPatcher.CreateHeadless(const DataDirectory, InstructionFilename,
     GameDirectory, BackupDirectory: string);
 var DataRoot, GameRoot, ConfigPath: string;
@@ -5025,6 +5027,7 @@ begin
         // TODO: Use procedural type to set up callback instead of doing it this ugly way!!
         // FIX(2006-12-10) Moved this down here to allow the check to be made even if
         //                 the install path is already set!
+        {$IFNDEF TSLPATCHER_HEADLESS}
         if (l_parentclass <> nil) and (l_parentclass is TTSLPatcher) then begin
             sRequired    := TTSLPatcher(l_parentclass).l_ini.ReadString('Settings', 'Required', '');
             if (sRequired <> '') then begin
@@ -5042,6 +5045,7 @@ begin
                 end;
             end;
         end;
+        {$ENDIF}
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // TLK file does not go in Override, nor should any blueprint for it be located

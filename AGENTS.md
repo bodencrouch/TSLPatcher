@@ -65,3 +65,5 @@
 
 - `BUILDING.md`: source-backed build, launch, runtime-data, and VS Code workflow details.
 - `ARCHITECTURE.md`: source-backed unit map, runtime sequence, handler boundaries, and historical-file notes.
+
+- `CLI.md`: native console build, options, actions, validation, and backup restoration.
