@@ -87,8 +87,8 @@ begin
   try
     AddGame(RegistryGame(1));
     AddGame(RegistryGame(2));
-    UserDirectory := GetEnvironmentVariable('HOME');
-    if UserDirectory = '' then UserDirectory := GetEnvironmentVariable('USERPROFILE');
+    UserDirectory := SysUtils.GetEnvironmentVariable('HOME');
+    if UserDirectory = '' then UserDirectory := SysUtils.GetEnvironmentVariable('USERPROFILE');
     {$IFDEF MSWINDOWS}
     SteamRoots.Add('C:\Program Files (x86)\Steam');
     SteamRoots.Add('C:\Program Files\Steam');
