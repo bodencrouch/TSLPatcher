@@ -8,7 +8,7 @@ unit UST_Common;
 
 interface
 
-uses Graphics, Classes;  // Must put this here since two functions return TIcon objects.
+uses {$IFNDEF TSLPATCHER_HEADLESS}Graphics,{$ENDIF} Classes;  // Must put this here since two functions return TIcon objects.
 
 // Popup boxes showing text to the user and returning button pressed.
 function ShowAlertBox(sMessage : string) : word;
@@ -53,8 +53,10 @@ function DeleteFolder(sFolder : string; bRecursive : boolean = false) : boolean;
 function GetFilesInFolder(sFolder : string; bNameOnly : boolean = true) : TStringList;
 
 // Get the Windows explorer icons associated with special file types.
+{$IFNDEF TSLPATCHER_HEADLESS}
 function GetFileTypeSmallIcon(sFilename : string) : TIcon;
 function GetFileTypeLargeIcon(sFilename : string) : TIcon;
+{$ENDIF}
 
 function GetFileSizeString(iBytes : integer) : string;
 function StringToResRef(sText : string) : string;
@@ -63,13 +65,16 @@ function GetRegistryString(sKeyName: string; sValue : string): string;
 
 implementation
 
-uses Dialogs, Forms, SysUtils, Windows, ShellAPI, ShlObj, Registry;
+uses SysUtils, {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}Dialogs, Forms, Windows, ShellAPI, ShlObj, Registry{$ENDIF};
 
+{$IFNDEF TSLPATCHER_HEADLESS}
 type PHICON = ^HICON;
+{$ENDIF}
 
 // -----------------------------------------------------------------------------
 //
 // -----------------------------------------------------------------------------
+{$IFNDEF TSLPATCHER_HEADLESS}
 function ShowAlertBox(sMessage : string) : word;
 begin
      result := MessageDlg(sMessage, mtWarning, [mbOK], 0);
@@ -97,6 +102,14 @@ end;
 // -----------------------------------------------------------------------------
 // UTILITY: Check if the string can be converted to an Unsigned Integer.
 // -----------------------------------------------------------------------------
+{$ELSE}
+function ShowAlertBox(sMessage : string) : word;
+begin raise Exception.Create(sMessage); end;
+function ShowInfoBox(sMessage : string) : word;
+begin raise Exception.Create(sMessage); end;
+function ShowConfirmBox(sMessage : string) : word;
+begin raise Exception.Create('Interactive confirmation unavailable: ' + sMessage); end;
+{$ENDIF}
 function GetIsNumber(sStr : string) : boolean;
 var
    i       : integer;
@@ -151,10 +164,12 @@ procedure MakeFileWritable(sFilename : string);
 var
    nFlags : Word;
 begin
-    if (SysUtils.FileExists(sFilename)) then begin
+    {$IFDEF TSLPATCHER_HEADLESS}sFilename := NativePath(sFilename);{$ENDIF}
+    if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename)) then begin
         nFlags := FileGetAttr(sFilename);
         if ((nFlags and faReadOnly) = faReadOnly) then begin
             nFlags := nFlags and not faReadOnly;
+            {$IFDEF TSLPATCHER_HEADLESS}NotifyWrite(sFilename);{$ENDIF}
             FileSetAttr(sFilename, nFlags);
         end;
     end;
@@ -169,7 +184,7 @@ var
    nFlags : Word;
 begin
     result := false;
-    if (SysUtils.FileExists(sFilename)) then begin
+    if ({$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename)) then begin
         nFlags := FileGetAttr(sFilename);
         result := ((nFlags and faReadOnly) = faReadOnly);
     end;
@@ -205,6 +220,7 @@ end;
 // -----------------------------------------------------------------------------
 // CALLBACK FUNCTION for OpenFolderDialog(). Do NOT call directly.
 // -----------------------------------------------------------------------------
+{$IFNDEF TSLPATCHER_HEADLESS}
 function OpenFolderSetup(Wnd: HWND; uMsg: UINT; lParam, lpData: LPARAM): integer stdcall;
 var
    oArea  : TRect;
@@ -328,7 +344,7 @@ begin
 
             // ADDED(2006-02-05) Set the current folder to the folder the application is run from...
             // CHANGED(2006-04-29) Made it an optional parameter to set the working folder...
-            if (Length(sWork) < 1) or not SysUtils.DirectoryExists(sWork) then begin
+            if (Length(sWork) < 1) or not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(sWork) then begin
                sWork := ExtractFilePath(sExecutable);
             end;
 
@@ -373,6 +389,12 @@ end;
 // -----------------------------------------------------------------------------
 // UTILITY: Check if the supplied string can be converted to a decimal number.
 // -----------------------------------------------------------------------------
+{$ELSE}
+function OpenFolderDialog(const sTitle: string; const iFlags: integer = 0): string;
+begin raise Exception.Create('Explicit game directory required: ' + sTitle); end;
+function RunShellGetOutput(sExecutable, sParameters, sWork: string): string;
+begin Result := RunNativeCommand(sExecutable, sParameters, sWork); end;
+{$ENDIF}
 function GetIsFloat(sStr : string) : boolean;
 var
    i       : integer;
@@ -498,6 +520,7 @@ end;
 // -----------------------------------------------------------------------------
 // Return the path to the Windows system directory (ROOT\Windows\System32)
 // -----------------------------------------------------------------------------
+{$IFNDEF TSLPATCHER_HEADLESS}
 function GetSystemDir: string;
 begin;
 	SetLength(Result, MAX_PATH);
@@ -544,7 +567,7 @@ begin
   // Get the extension of the file
   FileExt := UpperCase(ExtractFileExt(FileName));
   if ((FileExt <> '.EXE') and (FileExt <> '.ICO')) or
-      not FileExists(FileName) then begin
+      not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(FileName) then begin
     // If the file is an EXE or ICO and it exists, then
     // we will extract the icon from this file. Otherwise
     // here we will try to find the associated icon in the
@@ -656,6 +679,14 @@ end;
 // -----------------------------------------------------------------------------
 //
 // -----------------------------------------------------------------------------
+{$ELSE}
+function GetSystemDir: string;
+begin raise Exception.Create('Windows system directory unavailable'); end;
+function GetWindowsDir: string;
+begin raise Exception.Create('Windows directory unavailable'); end;
+function GetTempDir: string;
+begin Result := SysUtils.GetTempDir; end;
+{$ENDIF}
 function GetFileSizeString(iBytes : integer) : string;
 var
    sSuffix : string;
@@ -708,15 +739,15 @@ begin
     sFolder := IncludeTrailingPathDelimiter(sFolder);
 
     // Failsafe, prevent deleting from the root folders....
-    if (Length(sFolder) < 5) or (not SysUtils.DirectoryExists(sFolder)) then begin
+    if (Length(sFolder) < 5) or (not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DirectoryExists(sFolder)) then begin
         result := false;
         exit;
     end;
 
-    iRes := SysUtils.FindFirst(sFolder + '*.*', faAnyFile, oSearch);
+    iRes := {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FindFirst(sFolder + '*.*', faAnyFile, oSearch);
     while (iRes = 0) do begin
         if ((oSearch.Attr and faDirectory) = 0) then begin
-            SysUtils.DeleteFile(sFolder + oSearch.Name);
+            {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(sFolder + oSearch.Name);
         end
         else if bRecursive and (oSearch.Name <> '.') and (oSearch.Name <> '..') then begin
             DeleteFolder(sFolder + oSearch.Name, bRecursive);
@@ -726,7 +757,7 @@ begin
     end;
 
     SysUtils.FindClose(oSearch);
-    result := SysUtils.RemoveDir(sFolder);
+    result := {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.RemoveDir(sFolder);
 end;
 
 
@@ -742,7 +773,7 @@ begin
     sFolder := IncludeTrailingPathDelimiter(sFolder);
 
     oList := TStringList.Create();
-    oRes := SysUtils.FindFirst(sFolder + '*.*', faAnyFile, oSearch);
+    oRes := {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FindFirst(sFolder + '*.*', faAnyFile, oSearch);
     while (oRes = 0) do begin
         if ((oSearch.Attr and faDirectory) = 0) then begin
             if bNameOnly then
@@ -761,6 +792,7 @@ end;
 // -----------------------------------------------------------------------------
 // Reads a string value from the HKEY_LOCAL_MACHINE root in the Registry.
 // -----------------------------------------------------------------------------
+{$IFNDEF TSLPATCHER_HEADLESS}
 function GetRegistryString(sKeyName: string; sValue : string): string;
 var
   oRegistry: TRegistry;
@@ -781,6 +813,11 @@ end;
 // the max-value of a DWORD if it's specified in decimal notation, but appear
 // to accept it if it's in HexaDecimal, in the StrToInt() function.
 // -----------------------------------------------------------------------------
+{$ELSE}
+function GetRegistryString(sKeyName, sValue: string): string;
+begin Result := ''; end;
+{$ENDIF}
+
 function SafeStrToInt(const S : string) : Integer;
 begin
     if (S = '4294967295') then
@@ -788,6 +825,7 @@ begin
     else
         result := StrToInt(S);
 end;
+
 
 
 end.

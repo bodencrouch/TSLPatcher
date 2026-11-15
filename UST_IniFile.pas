@@ -2,7 +2,7 @@ unit UST_IniFile;
 
 interface
 
-uses Classes, IniFiles, UST_Common;
+uses Classes, IniFiles, UST_Common {$IFDEF TSLPATCHER_HEADLESS}, UPatcherPlatform{$ENDIF};
 
 type
 TST_Inifile = class(TIniFile)
@@ -20,7 +20,7 @@ implementation
 
 constructor TST_Inifile.Create(const FileName: string);
 begin
-    inherited Create(FileName);
+    inherited Create({$IFDEF TSLPATCHER_HEADLESS}NativePath(FileName){$ELSE}FileName{$ENDIF});
 end;
 
 

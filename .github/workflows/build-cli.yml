@@ -1,0 +1,191 @@
+name: Build CLI
+
+on:
+  push:
+    paths:
+      - '**.pas'
+      - '**.dpr'
+      - '.github/workflows/build-cli.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            executable: TSLPatcher
+          - os: windows-latest
+            executable: TSLPatcher.exe
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Free Pascal on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends fp-compiler fp-units-fcl
+
+      - name: Install Free Pascal on Windows
+        if: runner.os == 'Windows'
+        uses: gcarreno/setup-lazarus@3ee9d77e0c771b37c1069f218cb68bd5ce7c30fe
+        with:
+          lazarus-version: '4.4'
+          with-cache: false
+
+      - name: Compile CLI
+        run: |
+          set -euo pipefail
+          fpc -iV
+          mkdir -p build/units build/bin
+          fpc -B -Mdelphi -dTSLPATCHER_HEADLESS -FUbuild/units -FEbuild/bin -o${{ matrix.executable }} TSLPatcherCLI.dpr
+
+      - name: Check CLI and installation roundtrip
+        shell: python {0}
+        env:
+          CLI_EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          import os
+          import pathlib
+          import subprocess
+          import tempfile
+
+          executable = pathlib.Path('build/bin', os.environ['CLI_EXECUTABLE']).resolve()
+
+          def run(*arguments, expected=0):
+              command = [str(executable), *map(str, arguments)]
+              result = subprocess.run(command, input='', text=True, capture_output=True, timeout=60)
+              print(command, flush=True)
+              print(result.stdout, end='', flush=True)
+              print(result.stderr, end='', flush=True)
+              assert result.returncode == expected, (result.returncode, expected)
+              return result
+
+          assert 'Usage' in run('--help').stdout
+          assert 'TSLPatcher' in run('--version').stdout
+          run('--unknown-option', expected=2)
+          run('--log-level', expected=2)
+          with tempfile.TemporaryDirectory(prefix='TSLPatcher CLI smoke ') as temporary:
+              root = pathlib.Path(temporary)
+              game = root / 'game with spaces'
+              data = root / 'mod with spaces' / 'tslpatchdata'
+              override = game / 'override'
+              override.mkdir(parents=True)
+              data.mkdir(parents=True)
+              (game / 'dialog.tlk').write_bytes(b'fixture game marker')
+              original = b'original\x00\xff\r\n'
+              replacement = b'replacement\x00\xfe\n'
+              added = b'new file\x00\xfd\n'
+              (override / 'existing.bin').write_bytes(original)
+              (data / 'existing.bin').write_bytes(replacement)
+              (data / 'added.bin').write_bytes(added)
+              (data / 'changes.ini').write_text(
+                  '[Settings]\nLogLevel=3\n[InstallList]\nFiles=override\n'
+                  '[Files]\nReplace0=existing.bin\nFile1=added.bin\n', encoding='utf-8')
+              arguments = ['--tslpatchdata', data.parent, '--game-dir', game]
+              run(*arguments, '--validate')
+              run(*arguments, '--install')
+              assert (override / 'existing.bin').read_bytes() == replacement
+              assert (override / 'added.bin').read_bytes() == added
+              assert list((data.parent / 'backup').glob('cli-*'))
+              run(*arguments, '--validate')
+              for attempt in range(2):
+                  run(*arguments, '--uninstall')
+                  assert (override / 'existing.bin').read_bytes() == original
+                  assert not (override / 'added.bin').exists()
+              print('PASS install, validation, uninstall and repeated uninstall in paths with spaces')
+
+      - name: Check Windows registry game priority
+        if: runner.os == 'Windows'
+        shell: python {0}
+        run: |
+          import pathlib
+          import shutil
+          import subprocess
+          import tempfile
+          import winreg
+
+          executable = pathlib.Path('build/bin/TSLPatcher.exe').resolve()
+          registry_paths = [r'SOFTWARE\BioWare\SW\KOTOR', r'SOFTWARE\LucasArts\KotOR2']
+          saved = []
+          with tempfile.TemporaryDirectory(prefix='TSLPatcher registry smoke ') as temporary:
+              root = pathlib.Path(temporary)
+              games = [root / 'game one with spaces', root / 'game two with spaces']
+              package = root / 'interactive mod with spaces'
+              data = package / 'tslpatchdata'
+              data.mkdir(parents=True)
+              for game in games:
+                  (game / 'override').mkdir(parents=True)
+                  (game / 'dialog.tlk').write_bytes(b'fixture game marker')
+              (data / 'priority.bin').write_bytes(b'game one selected')
+              (data / 'info.rtf').write_text(r'{\rtf1 Disposable registry fixture}', encoding='ascii')
+              (data / 'changes.ini').write_text(
+                  '[Settings]\nLogLevel=3\nLookupGameNumber=1\n'
+                  '[InstallList]\nFiles=override\n[Files]\nFile0=priority.bin\n', encoding='ascii')
+              copied_executable = package / 'TSLPatcher.exe'
+              shutil.copy2(executable, copied_executable)
+              try:
+                  for registry_path, game in zip(registry_paths, games):
+                      try:
+                          with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, registry_path) as key:
+                              existed = True
+                      except FileNotFoundError:
+                          existed = False
+                      with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, registry_path, 0,
+                                              winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                          try:
+                              previous = winreg.QueryValueEx(key, 'Path')
+                          except FileNotFoundError:
+                              previous = None
+                          saved.append((registry_path, existed, previous))
+                          winreg.SetValueEx(key, 'Path', 0, winreg.REG_SZ, str(game))
+                  command = [str(copied_executable), '--cli', '--yes']
+                  result = subprocess.run(command, cwd=package, input='', text=True,
+                                          capture_output=True, timeout=60)
+                  print(command, flush=True)
+                  print(result.stdout, end='', flush=True)
+                  print(result.stderr, end='', flush=True)
+                  assert result.returncode == 0, result.returncode
+                  assert (games[0] / 'override/priority.bin').read_bytes() == b'game one selected'
+                  assert not (games[1] / 'override/priority.bin').exists()
+                  print('PASS LookupGameNumber=1 selects only game one with both registry roots present')
+              finally:
+                  for registry_path, existed, previous in reversed(saved):
+                      with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, registry_path, 0,
+                                          winreg.KEY_SET_VALUE) as key:
+                          if previous is None:
+                              winreg.DeleteValue(key, 'Path')
+                          else:
+                              value, kind = previous
+                              winreg.SetValueEx(key, 'Path', 0, kind, value)
+                      if not existed:
+                          winreg.DeleteKey(winreg.HKEY_LOCAL_MACHINE, registry_path)
+                  print('Restored registry Path values')
+
+      - name: Package Linux executable
+        if: runner.os == 'Linux'
+        run: tar -C build/bin -czf build/TSLPatcher-linux-x86_64.tar.gz TSLPatcher
+
+      - name: Upload Linux executable
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: TSLPatcher-linux-x86_64
+          path: build/TSLPatcher-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Windows executable
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: TSLPatcher-windows-x86_64
+          path: build/bin/TSLPatcher.exe
+          if-no-files-found: error

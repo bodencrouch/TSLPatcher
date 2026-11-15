@@ -21,7 +21,7 @@ unit UTLKFile;
 
 interface
 
-uses SysUtils, Windows, Classes;
+uses SysUtils, {$IFNDEF TSLPATCHER_HEADLESS}Windows{$ELSE}Types{$ENDIF}, Classes {$IFDEF TSLPATCHER_HEADLESS}, UPatcherPlatform{$ENDIF};
 
 // STRING FLAG CONSTANTS
 const TEXT_PRESENT      = $0001;
@@ -890,7 +890,7 @@ begin
      Reset();
 
      // ADDED(2005-09-15) Added check if specified file exists before trying to open it.
-     if not Sysutils.FileExists(sFilename) then
+     if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename) then
          raise EHell.Create('Unable to load specified TLK file since it could not be found!');
 
      l_filename := sFilename;
@@ -1019,7 +1019,7 @@ begin
            sFilename := l_filename;
 
      // ADDED(2006-12-02) Remove write protection from file if set...
-     if SysUtils.FileExists(sFilename) then
+     if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename) then
          MakeFileWritable(sFilename);
 
      outFile := TFileStream.Create(sFilename, fmCreate or fmShareExclusive);

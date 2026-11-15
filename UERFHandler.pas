@@ -66,7 +66,7 @@ unit UERFHandler;
 
 interface
 
-uses Windows, SysUtils, Classes, Forms, FileCtrl;
+uses {$IFNDEF TSLPATCHER_HEADLESS}Windows{$ELSE}Types{$ENDIF}, SysUtils, Classes{$IFNDEF TSLPATCHER_HEADLESS}, Forms, FileCtrl{$ENDIF} {$IFDEF TSLPATCHER_HEADLESS}, UPatcherPlatform{$ENDIF};
 
 type
     T4Char         = array [0..3]   of Char;
@@ -392,7 +392,7 @@ end;
 // -----------------------------------------------------------------------------
 class procedure TERF_ERFHeader.GetBuildTime(var iYear : WORD; var iDay : WORD);
 var
-   oCurrDate : TSystemTime;
+   Year, Month, Day: Word;
    iMonth    : integer;
 
    function GetFebruaryDays(iYear : WORD) : WORD;
@@ -404,15 +404,15 @@ var
        end;
    end;
 begin
-    DateTimeToSystemTime(Now(), oCurrDate);
+    DecodeDate(Now(), Year, Month, Day);
 
-    iYear := oCurrDate.wYear - 1900;
-    iDay  := oCurrDate.wDay;
+    iYear := Year - 1900;
+    iDay  := Day;
 
-    for iMonth := 1 to (oCurrDate.wMonth - 1) do begin
+    for iMonth := 1 to (Month - 1) do begin
         case iMonth of
             1:  inc(iDay, 31);
-            2:  inc(iDay, GetFebruaryDays(oCurrDate.wYear));
+            2:  inc(iDay, GetFebruaryDays(Year));
             3:  inc(iDay, 31);
             4:  inc(iDay, 30);
             5:  inc(iDay, 31);
@@ -909,7 +909,7 @@ begin
     result := false;
 
     // If the file does not exist it's obviously not a valid archive.
-    if not FileExists(sFilename) then
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename) then
         exit;
 
     // Open the file and check the header info...
@@ -997,7 +997,7 @@ var
    oHeaderRIM: TERF_RIMHeader;
    oHeaderERF: TERF_ERFHeader;
 begin
-    if not FileExists(sFilename) then begin
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename) then begin
         raise EERFError.CreateHelp('Unable to load file "' + sFilename + '", file not found!', 5);
     end;
 
@@ -1239,9 +1239,9 @@ var
     begin
         oList := TStringList.Create();
 
-        iRes := SysUtils.FindFirst(sFolder + '*.*', faAnyFile, rFile);
+        iRes := {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FindFirst(sFolder + '*.*', faAnyFile, rFile);
          while (iRes = 0) do begin
-             if SysUtils.FileExists(sFolder + rFile.Name) then begin
+             if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFolder + rFile.Name) then begin
                  oList.Add(sFolder + rFile.Name);
              end;
              iRes := SysUtils.FindNext(rFile);
@@ -1273,12 +1273,12 @@ var
     begin
         oList := GetFileList(sFolder);
         for j := 0 to (oList.count - 1) do begin
-            if SysUtils.FileExists(oList[j]) then
-                SysUtils.DeleteFile(oList[j]);
+            if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(oList[j]) then
+                {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.DeleteFile(oList[j]);
         end;
 
         oList.free();
-        SysUtils.RemoveDir(sFolder);
+        {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.RemoveDir(sFolder);
     end;
 
 begin
@@ -1305,9 +1305,16 @@ begin
     // 1. Make a TEMP folder to use to briefly store data while working.
     sTemp := ExtractFileName(f_filename);
     sTemp := lowercase(copy(sTemp, 1, Pos(ExtractFileExt(sTemp), sTemp)-1));
+    {$IFDEF TSLPATCHER_HEADLESS}
+    f_tmpfolder := IncludeTrailingPathDelimiter(SysUtils.GetTempDir) + 'tslpatcher-' +
+        IntToStr(GetProcessID) + '-' + IntToHex(PtrUInt(Self), 16) + PathDelim;
+    {$ELSE}
     f_tmpfolder := f_tmpfolderpath + lowercase(sTemp) + '_tmp\';
+    {$ENDIF}
     sTemp := '';
-    ForceDirectories(f_tmpfolder);
+    oFiles := nil;
+    try
+    {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.ForceDirectories(f_tmpfolder);
 
 
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1344,7 +1351,7 @@ begin
     // 3. Copy new files to add to the ERF to the TEMP folder...
     if (f_newlist.Count > 0) then begin
         for i := 0 to (f_newlist.count - 1) do begin
-            if FileExists(f_newlist[i]) then begin
+            if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(f_newlist[i]) then begin
                // CHANGED(2006-08-09) Use stored resref name instead at destination name...
                CopyNewFile(f_newlist[i], f_tmpfolder + f_namelist[i]);
                // CopyNewFile(f_newlist[i], f_tmpfolder + ExtractFileName(f_newlist[i]));
@@ -1383,8 +1390,7 @@ begin
 
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     // 6. Close FileStream if open, re-open it in Write mode...
-    if (f_file <> nil) then
-        f_file.free();
+    FreeAndNil(f_file);
 
     // CHANGED(2006-08-06) changed to Create/Overwrite depending on if the file exists.
     // FIX(2006-09-30)     Changed to ONLY use fmCreate, the other write mode fucked up
@@ -1553,15 +1559,12 @@ begin
         end
     end;
 
-    // Free the TEMP folder files list when all files have been processed.
-    oFiles.free();
+    finally
+        // A rejected output constructor must leave no dangling stream or scratch data.
+        oFiles.Free();
+        DeleteFolder(f_tmpfolder);
+    end;
 
-    // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    // 10. Delete the TEMP folder and all temporarily extracted/copied files.
-    DeleteFolder(f_tmpfolder);
-
-
-    // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     // 11. Reload the recently written ERF file into this object.
     //     This reopens the FileStream in read mode, and resets the NewList,
     //     f_dirty and all stored data.
@@ -1648,7 +1651,7 @@ begin
 
     // Reset to default/unopened values...
     f_filename      := '';
-    f_tmpfolderpath := ExtractFilePath(Application.ExeName);
+    f_tmpfolderpath := ExtractFilePath({$IFDEF TSLPATCHER_HEADLESS}ParamStr(0){$ELSE}Application.ExeName{$ENDIF});
     f_loaded        := false;
     f_newfile       := false;
     f_dirty         := false;
@@ -1769,7 +1772,7 @@ begin
         if (Length(sExt) > 0) then
             sFilename := sFilename + '.' + sExt;
 
-        sFilename := ExtractFilePath(Application.ExeName) + sFilename;
+        sFilename := ExtractFilePath({$IFDEF TSLPATCHER_HEADLESS}ParamStr(0){$ELSE}Application.ExeName{$ENDIF}) + sFilename;
     end;
 
     // Read data from ERF and write to new file on disk.

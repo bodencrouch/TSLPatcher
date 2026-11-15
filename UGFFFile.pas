@@ -59,7 +59,7 @@ unit UGFFFile;
 
 interface
 
-uses SysUtils, Classes, Windows, UStrTok, UST_Common;
+uses SysUtils, Classes, {$IFNDEF TSLPATCHER_HEADLESS}Windows{$ELSE}Types{$ENDIF}, UStrTok, UST_Common {$IFDEF TSLPATCHER_HEADLESS}, UPatcherPlatform{$ENDIF};
 
 // Size of buffers used for some read/write operations...
 const BYTE_BUFFER_SIZE         = 4096;
@@ -579,7 +579,7 @@ end;
 // -----------------------------------------------------------------------------
 procedure TGFFFile.LoadFile(sFilename : string);
 begin
-    if not FileExists(sFilename) then
+    if not {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename) then
        raise EGFFError.CreateHelp('Specified file ' + sFilename + ' could not be found to be opened!', 0);
 
     ResetAll();
@@ -1518,7 +1518,7 @@ begin
        sFilename := l_filename;
 
     // If the file already exists, make sure it can be overwritten.
-    if SysUtils.FileExists(sFilename) then
+    if {$IFDEF TSLPATCHER_HEADLESS}UPatcherPlatform{$ELSE}SysUtils{$ENDIF}.FileExists(sFilename) then
         MakeFileWritable(sFilename);
 
 
@@ -2181,7 +2181,7 @@ begin
             end
             else begin
                 Finalize(l_fields[i]);
-                System.Move(l_fields[i+1], l_fields[i], (Length(l_fields)-i-1) * sizeof(TGFFField)+1);
+                System.Move(l_fields[i+1], l_fields[i], (Length(l_fields)-i-1) * sizeof(TGFFField));
                 SetLength(l_fields, Length(l_fields) - 1);
             end;
 
@@ -2674,7 +2674,7 @@ begin
 
     if (iIndex <> DWORD(High(l_structs))) then begin
         Finalize(l_structs[iIndex]);
-        System.Move(l_structs[iIndex+1], l_structs[iIndex], (DWORD(Length(l_structs)) - iIndex - 1) * sizeof(TGFFStruct) + 1);
+        System.Move(l_structs[iIndex+1], l_structs[iIndex], (DWORD(Length(l_structs)) - iIndex - 1) * sizeof(TGFFStruct));
     end;
 
     SetLength(l_structs, Length(l_structs) - 1);
@@ -3067,7 +3067,7 @@ begin
     end
     else begin
         Finalize(substrings[iIndex]);
-        System.Move(substrings[iIndex+1], substrings[iIndex], (Length(substrings)-iIndex-1) * sizeof(TGFF_CSubString)+1);
+        System.Move(substrings[iIndex+1], substrings[iIndex], (Length(substrings)-iIndex-1) * sizeof(TGFF_CSubString));
         SetLength(substrings, Length(substrings) - 1);
     end;
 
@@ -3271,7 +3271,7 @@ end;
 // -----------------------------------------------------------------------------
 // Constructor
 // -----------------------------------------------------------------------------
-constructor TGFF_SShort.Create(sLabel : string; iData : Short);
+constructor TGFF_SShort.Create(sLabel : string; iData : SmallInt);
 begin
      inherited Create(sLabel);
      Self.fieldtype := FIELD_TYPE_SHORT;
